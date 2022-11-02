@@ -27,7 +27,10 @@ file(GLOB SOURCES
         src/*.cpp)
 
 add_library(resty_nghttp2 SHARED ${SOURCES})
-set_target_properties(resty_nghttp2 PROPERTIES VERSION ${PROJECT_VERSION} SOVERSION ${PROJECT_VERSION_MAJOR})
+
+if (NOT LUA_CPATH)
+    set_target_properties(resty_nghttp2 PROPERTIES VERSION ${PROJECT_VERSION} SOVERSION ${PROJECT_VERSION_MAJOR})
+endif()
 
 target_include_directories(resty_nghttp2 PRIVATE ${OPENSSL_INCLUDE_DIR} ${Boost_INCLUDE_DIR})
 
