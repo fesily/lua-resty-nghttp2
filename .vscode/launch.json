@@ -1,0 +1,29 @@
+{
+    // 使用 IntelliSense 了解相关属性。 
+    // 悬停以查看现有属性的描述。
+    // 欲了解更多信息，请访问: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "lua",
+            "request": "launch",
+            "name": "Debug",
+            "program": "./spec/nghttp2_web_spec.lua",
+            "luaexe": "resty",
+            "arg0": [
+                "-e",
+                "arg[1]=arg[0];arg[0]='busted2';require 'resty.busted2'({standalone=false})"
+            ],
+            "luaVersion": "jit",
+            "cpath": null,
+            "path": null,
+            "stopOnEntry": false
+        },
+        {
+            "type": "lldb",
+            "request": "attach",
+            "name": "Attach",
+            "pid": "${command:pickMyProcess}" // use ${command:pickProcess} to pick other users' processes
+        }
+    ]
+}

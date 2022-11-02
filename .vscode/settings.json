@@ -1,0 +1,22 @@
+{
+    "Lua.runtime.version": "LuaJIT",
+    "Lua.diagnostics.globals": [
+        "ngx"
+    ],
+    "Lua.workspace.library": [
+        "${3rd}/OpenResty/library",
+        "${3rd}/busted/library",
+        "${3rd}/luassert/library",
+    ],
+    "Lua.workspace.checkThirdParty": false,
+    "files.associations": {
+        "*.log": "log",
+        "*.sxx": "systemtap",
+        ".busted": "lua",
+        "system_error": "cpp",
+        "ios": "cpp",
+        "future": "cpp",
+        "new": "cpp",
+        "__node_handle": "c"
+    }
+}

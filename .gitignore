@@ -30,3 +30,11 @@
 *.exe
 *.out
 *.app
+/luarocks
+/lua
+/lua_modules
+/.luarocks
+/cmake-build-debug
+/cmake-build-relwithdebinfo
+/.idea
+/build.luarocks

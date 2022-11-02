@@ -1,0 +1,170 @@
+local ffi = require "ffi"
+local base = require 'resty.core.base'
+local lib = require "resty.nghttp2.libnghttp2"
+local semaphore = require 'ngx.semaphore'
+
+local tab_new = require("table.new")
+local tab_insert = table.insert
+local c_str_arr_t = ffi.typeof("const char*[?]")
+local tab_is_array = require 'table.isarray'
+local errlen = 1024
+
+local _M = {}
+local _mt = {
+    __index = _M
+}
+---@alias header_value string|boolean
+---@param headers table<string,string>| header_value[]
+function _M:send_headers(headers)
+    assert(not self.submited)
+    if type(headers) ~= 'table' then
+        return nil, 'headers must be a table'
+    end
+
+    if tab_is_array(headers) then
+
+        for _, v in ipairs(headers) do
+            if type(v) ~= 'table' then
+                return nil, 'array headers value must be a table'
+            end
+            local key = tostring(v[0])
+            local value = tostring(v[1])
+            local sensitive = tostring(v[3])
+
+            lib.nghttp2_asio_request_push_headers(self.handler, key, value, sensitive)
+        end
+    else
+        for k, v in pairs(headers) do
+            lib.nghttp2_asio_request_push_headers(self.handler, tostring(k), tostring(v), false)
+        end
+    end
+    return true
+end
+
+function _M:send_body(body)
+    assert(not self.submited)
+    if type(body) == 'function' then
+        --lib.nghttp2_asio_client_submit_request_set_body_iter(self.handler, body)
+    else
+
+        return lib.nghttp2_asio_request_set_body(self.handler, tostring(body)) == 0
+    end
+    return nil, 'Not implemented body type'
+end
+
+function _M:get_error()
+    local buf = base.get_string_buf(errlen)
+    local ret = lib.nghttp2_asio_submit_error(self.handler, buf, errlen)
+    if ret == 0 then
+        return ffi.string(buf)
+    end
+    if ret == 1 then
+        return nil
+    end
+    return "unknown error"
+end
+
+---@return ngx.http.status_code?,string?
+function _M:submit(read_response_headers, timeout)
+    assert(not self.submited)
+    local sem, err = semaphore.new()
+    if not sem then return nil, err end
+    self.read_response_headers = read_response_headers
+    self.submited = true
+    if lib.nghttp2_asio_client_submit(self.client, self.handler, not not read_response_headers, sem.sem) ~= 0 then
+        return nil, self.get_client_error(self.client)
+    end
+    local ok, err = sem:wait(timeout)
+    if not ok then return nil, err end
+
+    local status_code = lib.nghttp2_asio_response_code(self.handler);
+    if status_code == 0 then
+        return nil, self:get_error()
+    end
+    return status_code
+end
+
+local keys = c_str_arr_t(128)
+local values = c_str_arr_t(128)
+local function get_cache_keys(len)
+    if len > 128 then
+        return c_str_arr_t(len)
+    else
+        return keys
+    end
+end
+
+local function get_cache_values(len)
+    if len > 128 then
+        return c_str_arr_t(len)
+    else
+        return values
+    end
+end
+
+function _M:read_headers()
+    if self.read_response_headers then
+        local len = lib.nghttp2_asio_response_header_length(self.handler);
+        if len == 0 then return end
+        local keys = get_cache_keys(len)
+        local values = get_cache_values(len)
+        len = lib.nghttp2_asio_response_headers(self.handler, keys, values,
+            self.read_response_headers)
+        if len == 0 then return end
+        local headers = tab_new(0, len)
+        for i = 1, len do
+            local key = ffi.string(keys[i - 1])
+            local value = ffi.string(values[i - 1])
+            headers[key] = value
+        end
+        return headers
+    end
+    return nil, 'cant read headers'
+end
+
+---@return string[]|string?
+function _M:read_bodys()
+    local datalen = lib.nghttp2_asio_response_body_length(self.handler);
+    if datalen > 0 then
+        if datalen == 1 then
+            return lib.nghttp2_asio_response_body(self.handler, 0)
+        end
+        local bodys = tab_new(datalen, 0)
+        for i = 1, datalen, 1 do
+            local data = lib.nghttp2_asio_response_body(self.handler, i - 1)
+            if data then
+                tab_insert(bodys, data)
+            end
+        end
+        return bodys
+    end
+end
+
+---@return string?
+function _M:read_body(maxlength)
+    maxlength = maxlength or 4096
+    local content_length = lib.nghttp2_asio_response_content_length(self.handler);
+    if content_length > maxlength then
+        content_length = maxlength
+    end
+    local buf = base.get_string_buf(content_length)
+
+    content_length = lib.nghttp2_asio_response_content(self.handler, buf, content_length)
+
+    if content_length == 0 then return end
+
+    return ffi.string(buf, content_length)
+end
+
+function _M.new(handler, ctx, get_client_error, client)
+    return setmetatable({
+        handler = handler,
+        ctx = ctx,
+        read_response_headers = false,
+        submited = false,
+        client = client,
+        get_client_error = get_client_error
+    }, _mt)
+end
+
+return _M

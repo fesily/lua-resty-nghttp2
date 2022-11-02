@@ -1,0 +1,6 @@
+return {
+    default = {
+        cpath = "./cmake-build-debug/?.so;./cmake-build-minsizerel/?.so;./cmake-build-release/?.so;./cmake-build-relwithdebinfo/?.so;",
+        lpath = "lib/?.lua;lib/?/init.lua;t/?.lua;t/?/init.lua;",
+    }
+}

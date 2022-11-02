@@ -1,0 +1,398 @@
+//
+// Created by fesily on 2022/10/27.
+//
+
+#include <iostream>
+
+#include <nghttp2/asio_http2_client.h>
+#include <nghttp2/asio_http2.h>
+
+#include <optional>
+#include <variant>
+
+#include "resty_nghttp2.h"
+
+using boost::asio::ip::tcp;
+
+using namespace nghttp2::asio_http2;
+using namespace nghttp2::asio_http2::client;
+
+#ifndef ENABLE_HTTPS
+#define ENABLE_HTTPS 0
+#endif
+struct ngx_lua_sema_t;
+
+struct nghttp2_asio_client {
+    session session;
+    std::string uri;
+    std::string scheme, host, service;
+    ngx_lua_sema_t *ngx_connection_event;
+    std::atomic_bool ready = false;
+    boost::system::error_code ec;
+    ngx_lua_ffi_sema_post post_event_cb;
+#if ENABLE_HTTPS
+    std::optional<boost::asio::ssl::context> tls_ctx;
+#endif
+
+    void post_event(ngx_lua_sema_t *event) {
+        post_event_cb(event, 1);
+    }
+
+    void post_connection_event() {
+        if (ngx_connection_event)
+            post_event_cb(ngx_connection_event, 1);
+    }
+};
+
+
+struct nghttp2_asio_ctx {
+    boost::asio::io_service io_service;
+    boost::system::error_code ec;
+    ngx_lua_ffi_sema_post post_event_cb = nullptr;
+};
+
+struct nghttp2_asio_submit {
+    boost::system::error_code ec;
+
+    std::string method, uri;
+    priority_spec spec;
+    header_map headers;
+    std::optional<std::variant<std::string, generator_cb>> data;
+
+    int status_code = 0;
+    int64_t content_length = 0;
+    std::vector<std::string> response_data;
+
+    void *user_data;
+};
+
+#define TRY \
+    try     \
+    {
+#define DEFAULT_CATCH                                   \
+    }                                                   \
+    catch (std::exception & e)                          \
+    {                                                   \
+        std::cerr << "exception: " << e.what() << "\n"; \
+    }
+
+
+extern "C"
+{
+
+BOOST_SYMBOL_EXPORT nghttp2_asio_ctx *nghttp2_asio_init_ctx(ngx_lua_ffi_sema_post ptr) {
+    if (!ptr)
+        return nullptr;
+    TRY
+        auto ctx = new(std::nothrow) nghttp2_asio_ctx{
+                .post_event_cb = ptr};
+        if (ctx == nullptr) {
+            return nullptr;
+        }
+        return ctx;
+    DEFAULT_CATCH
+    return nullptr;
+}
+
+BOOST_SYMBOL_EXPORT void nghttp2_asio_release_ctx(nghttp2_asio_ctx *ctx) {
+    if (!ctx) {
+        return;
+    }
+    TRY
+        ctx->io_service.stop();
+        delete ctx;
+    DEFAULT_CATCH
+}
+
+BOOST_SYMBOL_EXPORT int64_t nghttp2_asio_run_once(nghttp2_asio_ctx *ctx) {
+    if (!ctx)
+        return -1;
+    TRY
+        ctx->io_service.restart();
+        return (int64_t) ctx->io_service.poll_one(ctx->ec);
+    DEFAULT_CATCH
+    return 0;
+}
+
+BOOST_SYMBOL_EXPORT int64_t nghttp2_asio_run(nghttp2_asio_ctx *ctx) {
+    if (!ctx)
+        return -1;
+    TRY
+        ctx->io_service.restart();
+        return (int64_t) ctx->io_service.poll(ctx->ec);
+    DEFAULT_CATCH
+    return 0;
+}
+
+BOOST_SYMBOL_EXPORT int nghttp2_asio_error(nghttp2_asio_ctx *ctx, char *u_err, size_t errlen) {
+    if (!ctx || ctx->io_service.stopped())
+        return -1;
+    if (ctx->ec) {
+        auto ec = std::move(ctx->ec);
+        return ec.message(u_err, errlen) != nullptr ? 0 : -1;
+    }
+    return 1;
+}
+
+BOOST_SYMBOL_EXPORT nghttp2_asio_client *
+nghttp2_asio_client_new(nghttp2_asio_ctx *ctx, const char *c_uri, double read_timeout,
+                        double connection_timeout, ngx_lua_sema_t *event) {
+    TRY
+        if (!ctx) return nullptr;
+
+        boost::system::error_code &ec = ctx->ec;
+
+        std::string uri(c_uri);
+        std::string scheme, host, service;
+
+        if (::host_service_from_uri(ec, scheme, host, service, uri)) {
+            return nullptr;
+        }
+        std::unique_ptr<nghttp2_asio_client> unique_client;
+        if (scheme == "https") {
+#ifndef ENABLE_HTTPS
+            boost::asio::ssl::context tls_ctx(boost::asio::ssl::context::sslv23);
+            tls_ctx.set_default_verify_paths();
+            // disabled to make development easier...
+            // tls_ctx.set_verify_mode(boost::asio::ssl::verify_peer);
+            configure_tls_context(ec, tls_ctx);
+
+            unique_client.reset(new nghttp2_asio_client{
+                .tls_ctx = std::move(tls_ctx),
+                .session = session(ctx->io_service, tls_ctx, host, service,
+                                   boost::posix_time::milliseconds(connection_timeout)),
+                .uri = std::move(uri),
+                .scheme = std::move(scheme),
+                .host = std::move(host),
+                .service = std::move(service),
+                .post_event_cb = ctx->post_event_cb,
+            });
+#else
+            return nullptr;
+#endif
+        } else {
+            unique_client.reset(new nghttp2_asio_client{
+                    .session = session(ctx->io_service, host, service,
+                                       boost::posix_time::milliseconds(size_t(connection_timeout * 1000))),
+                    .uri = std::move(uri),
+                    .scheme = std::move(scheme),
+                    .host = std::move(host),
+                    .service = std::move(service),
+                    .ngx_connection_event = event,
+                    .post_event_cb = ctx->post_event_cb,
+            });
+        }
+        auto client = unique_client.get();
+        client->ready = false;
+        auto &sess = client->session;
+        sess.read_timeout(boost::posix_time::milliseconds(size_t(read_timeout * 1000)));
+        sess.on_connect([client](auto &&d) {
+            client->ready = true;
+            client->post_connection_event();
+        });
+
+        sess.on_error([client](const boost::system::error_code &ec) {
+            client->ec = ec;
+            client->ready = false;
+            client->post_connection_event();
+        });
+
+        return unique_client.release();
+
+    DEFAULT_CATCH
+    return nullptr;
+}
+BOOST_SYMBOL_EXPORT void nghttp2_asio_client_delete(nghttp2_asio_client *client) {
+    if (client)
+        delete client;
+}
+
+BOOST_SYMBOL_EXPORT int nghttp2_asio_client_error(nghttp2_asio_client *client, char *u_err, size_t errlen) {
+    if (!client)
+        return -1;
+    if (client->ec) {
+        auto ec = std::move(client->ec);
+        return ec.message(u_err, errlen) != nullptr ? 0 : -1;
+    }
+    return 1;
+}
+
+BOOST_SYMBOL_EXPORT bool nghttp2_asio_client_is_ready(nghttp2_asio_client *client) {
+    return client && client->ready;
+}
+
+BOOST_SYMBOL_EXPORT nghttp2_asio_submit *
+nghttp2_asio_submit_new(nghttp2_asio_client *client, const char *_method, const char *_uri, const char *data,
+                        void *user_data) {
+    if (!client || !client->ready || !_method || !_uri)
+        return nullptr;
+
+    TRY auto req = new(std::nothrow) nghttp2_asio_submit{
+                .method = _method,
+                .uri = _uri,
+                .user_data = user_data,
+        };
+        if (data) {
+            req->data.emplace(data);
+        }
+        return req;
+    DEFAULT_CATCH
+    return nullptr;
+}
+BOOST_SYMBOL_EXPORT void nghttp2_asio_submit_delete(nghttp2_asio_submit* submit) {
+    if (submit)
+        delete submit;
+}
+
+BOOST_SYMBOL_EXPORT int
+nghttp2_asio_request_push_headers(nghttp2_asio_submit *req, const char *key, const char *value,
+                                  bool sensitive) {
+    if (!req || !key) {
+        return -1;
+    }
+    TRY
+        if (!value)
+            value = "";
+        req->headers.emplace(key, header_value{value, sensitive});
+        return 0;
+    DEFAULT_CATCH
+    return -1;
+}
+
+BOOST_SYMBOL_EXPORT int
+nghttp2_asio_request_set_body_iter(nghttp2_asio_submit *submitCtx, submit_request_data_cb cb) {
+    if (!submitCtx) {
+        return -1;
+    }
+    TRY
+        submitCtx->data.emplace(cb);
+        return 0;
+    DEFAULT_CATCH
+    return -1;
+}
+
+BOOST_SYMBOL_EXPORT int
+nghttp2_asio_request_set_body(nghttp2_asio_submit *submitCtx, const char *data, size_t len) {
+    if (!submitCtx) {
+        return -1;
+    }
+    TRY
+        submitCtx->data.emplace(std::string(data, len));
+        return 0;
+    DEFAULT_CATCH
+    return -1;
+}
+
+BOOST_SYMBOL_EXPORT int
+nghttp2_asio_client_submit(nghttp2_asio_client *client, nghttp2_asio_submit *submitCtx, bool need_headers,
+                           ngx_lua_sema_t *sem) {
+    if (!client || !client->ready || !submitCtx)
+        return -1;
+
+    TRY
+        auto &ec = client->ec;
+
+
+        const request *req;
+
+        if (!submitCtx->data.has_value())
+            req = client->session.submit(ec, submitCtx->method, submitCtx->uri, submitCtx->headers,
+                                         submitCtx->spec);
+        else {
+
+            req = std::visit([&](auto &&arg) -> const request * {
+                                 return client->session.submit(ec, submitCtx->method, submitCtx->uri, arg, submitCtx->headers,
+                                                               submitCtx->spec);
+                             },
+                             submitCtx->data.value());
+        }
+        if (!req) {
+            return -1;
+        }
+
+        req->on_response([submitCtx, need_headers](const response &response) {
+            submitCtx->status_code = response.status_code();
+            submitCtx->content_length = response.content_length();
+            if (need_headers) {
+                submitCtx->headers = response.header();
+            }
+            response.on_data([submitCtx](const uint8_t *data, std::size_t len) {
+                if (data) {
+                    static_assert(sizeof(uint8_t) == sizeof(char));
+                    submitCtx->response_data.emplace_back((const char *) data, len);
+                }
+            });
+        });
+        req->on_close([client, sem](uint32_t error_code) { client->post_event(sem); });
+
+        return 0;
+    DEFAULT_CATCH
+    return -1;
+}
+
+BOOST_SYMBOL_EXPORT int nghttp2_asio_submit_error(nghttp2_asio_submit *submitCtx, char *u_err, size_t errlen) {
+    if (!submitCtx)
+        return -1;
+    if (submitCtx->ec) {
+        auto ec = std::move(submitCtx->ec);
+        return ec.message(u_err, errlen) != nullptr ? 0 : -1;
+    }
+    return 1;
+}
+
+BOOST_SYMBOL_EXPORT int
+nghttp2_asio_response_code(nghttp2_asio_submit *submitCtx) {
+    return submitCtx->status_code;
+}
+
+BOOST_SYMBOL_EXPORT size_t nghttp2_asio_response_header_length(nghttp2_asio_submit *submitCtx) {
+    return submitCtx->headers.size();
+}
+
+BOOST_SYMBOL_EXPORT int64_t nghttp2_asio_response_content_length(nghttp2_asio_submit *submitCtx) {
+    return submitCtx->content_length;
+}
+
+BOOST_SYMBOL_EXPORT size_t nghttp2_asio_response_body_length(nghttp2_asio_submit *submitCtx) {
+    return submitCtx->response_data.size();
+}
+
+BOOST_SYMBOL_EXPORT int64_t
+nghttp2_asio_response_content(nghttp2_asio_submit *submitCtx, char *output, int64_t len) {
+    TRY
+        if (len <= 0) return 0;
+        auto origin_len = len;
+        for (auto &body: submitCtx->response_data) {
+            auto cpy_len = std::min(len, (int64_t) body.size());
+            memcpy(output, body.c_str(), cpy_len);
+            output = output + cpy_len;
+            len -= cpy_len;
+            if (len <= 0)
+                break;
+        }
+        return origin_len - len;
+    DEFAULT_CATCH
+    return 0;
+}
+
+BOOST_SYMBOL_EXPORT const char *nghttp2_asio_response_body(nghttp2_asio_submit *submitCtx, int index) {
+    if (index >= submitCtx->response_data.size())
+        return nullptr;
+    return submitCtx->response_data[index].c_str();
+}
+
+BOOST_SYMBOL_EXPORT int
+nghttp2_asio_response_headers(nghttp2_asio_submit *submitCtx, const char **headers_key,
+                              const char **headers_value, size_t len) {
+    TRY
+        len = std::min(len, submitCtx->headers.size());
+        auto iter = submitCtx->headers.cbegin();
+        for (size_t i = 0; i < len; ++i, iter++) {
+            headers_key[i] = iter->first.c_str();
+            headers_value[i] = iter->second.value.c_str();
+        }
+        return len;
+    DEFAULT_CATCH
+    return -1;
+}
+}
