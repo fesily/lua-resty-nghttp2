@@ -147,6 +147,9 @@ function _M:read_headers()
     return nil, 'cant read headers'
 end
 
+function _M:bodys_length()
+    return lib.nghttp2_asio_response_body_length(self.handler)
+end
 ---@return string[]|string?
 function _M:read_bodys()
     local datalen = lib.nghttp2_asio_response_body_length(self.handler);

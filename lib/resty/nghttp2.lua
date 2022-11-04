@@ -113,9 +113,11 @@ function _M:request(method, uri, headers, data, read_headers, timeout)
         if err == 'retry' then
             local client, err = self:restart()
             if not client then return nil, err end
-            return client:submit(method, uri, headers, data, read_headers, timeout)
+            return client:request(method, uri, headers, data, read_headers, timeout)
         end
     end
+    submit.status = status_code
+    submit.has_body = submit:bodys_length() > 0
     return submit
 end
 
