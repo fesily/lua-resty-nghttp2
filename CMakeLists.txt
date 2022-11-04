@@ -7,6 +7,12 @@ project(resty_nghttp2 VERSION 1.0.0)
 
 option(ENABLE_HTTPS "enable https support" OFF)
 option(TESTS "test" OFF)
+option(SANITIZE_ADDRESS "enable sanitize address" OFF)
+
+if (SANITIZE_ADDRESS)
+    add_compile_options(-fsanitize=address)
+    add_link_options(-fsanitize=address)
+endif()
 
 set(CMAKE_VERBOSE_MAKEFILE ON)
 set(CMAKE_CXX_STANDARD 20)

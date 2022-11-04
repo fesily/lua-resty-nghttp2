@@ -8,7 +8,7 @@
             "type": "lua",
             "request": "launch",
             "name": "Debug",
-            "program": "./spec/nghttp2_web_spec.lua",
+            "program": "./spec/mulit_submit_spec.lua",
             "luaexe": "resty",
             "arg0": [
                 "-e",
@@ -17,7 +17,10 @@
             "luaVersion": "jit",
             "cpath": null,
             "path": null,
-            "stopOnEntry": false
+            "stopOnEntry": false,
+            "env": {
+                "DYLD_INSERT_LIBRARIES":"/Users/apple/lua-resty-waf/libfrida-gadget.dylib"
+            }
         },
         {
             "type": "lldb",

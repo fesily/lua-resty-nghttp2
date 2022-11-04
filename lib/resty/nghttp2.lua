@@ -51,19 +51,28 @@ local function get_client_error(client)
     return "unknown error"
 end
 
-local idle_tick = 1
-local busy_tick = 0.05
+local tick = 0
 local nghttp2_ctx
-local function timer(p, ctx)
-    if p then return end
-    if not nghttp2_ctx then return end
-    local count = lib.nghttp2_asio_run(ctx)
-    if count == 0 then
-        ngx.timer.at(idle_tick, timer, ctx)
-    else
-        get_error(ctx)
-        ngx.timer.at(busy_tick, timer, ctx)
+local function timer(p)
+    if p then
+        nghttp2_ctx = nil
+        return
     end
+    local count = 0
+    while nghttp2_ctx do
+        if lib.nghttp2_asio_run(nghttp2_ctx) > 0 then
+            local err = get_error(nghttp2_ctx)
+            if err then
+                ngx.log(ngx.ERR, "nghttp2 run err:", err)
+            end
+        end
+        ngx.sleep(tick)
+        count = count + 1
+        if count > 100 then
+            break
+        end
+    end
+    ngx.timer.at(tick, timer, nghttp2_ctx)
 end
 
 function _M.init_ctx()
@@ -75,20 +84,24 @@ function _M.init_ctx()
         error('Could not initialize nghttp2_asio_client')
     end
     ffi.gc(ctx, lib.nghttp2_asio_release_ctx)
-    ngx.timer.at(busy_tick, timer, ctx)
+    ngx.timer.at(tick, timer, ctx)
     nghttp2_ctx = ctx
     return true
 end
 
 function _M.release_ctx()
-    if not nghttp2_ctx then return end
+    if not nghttp2_ctx then
+        return
+    end
     nghttp2_ctx = nil
 end
 
 function _M.new(uri, connection_timeout, read_timeout)
     if not nghttp2_ctx then
         local ok, err = _M.init_ctx()
-        if not ok then return nil, err end
+        if not ok then
+            return nil, err
+        end
     end
     if not uri then
         return nil, 'uri is required'
@@ -105,14 +118,18 @@ function _M.new(uri, connection_timeout, read_timeout)
     if client == nil then
         return nil, get_error(nghttp2_ctx)
     end
-    ffi.gc(client, lib.nghttp2_asio_client_delete)
 
     local ok, err = sem:wait(connection_timeout)
-    if not ok then return nil, err end
+    if not ok then
+        lib.nghttp2_asio_client_delete(client)
+        return nil, err
+    end
+    ffi.gc(client, lib.nghttp2_asio_client_delete)
+
     if not lib.nghttp2_asio_client_is_ready(client) then
         return nil, get_client_error(client)
     end
-    return setmetatable({ client = client }, _mt)
+    return setmetatable({ client = client, sem = sem }, _mt)
 end
 
 function _M:new_submit(method, uri, data)

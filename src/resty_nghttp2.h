@@ -25,7 +25,7 @@ int nghttp2_asio_error(nghttp2_asio_ctx *ctx, char *u_err, size_t errlen);
 
 nghttp2_asio_client* nghttp2_asio_client_new(nghttp2_asio_ctx *ctx, const char *c_uri, double read_timeout,
                                              double connection_timeout, ngx_lua_sema_t* event);
-void nghttp2_asio_client_delete(nghttp2_asio_client* client);
+void nghttp2_asio_client_delete(nghttp2_asio_client *client);
 int nghttp2_asio_client_error(nghttp2_asio_client *client, char *u_err, size_t errlen);
 bool nghttp2_asio_client_is_ready(nghttp2_asio_client *client);
 int
@@ -35,8 +35,7 @@ nghttp2_asio_submit *
 nghttp2_asio_submit_new(nghttp2_asio_client *client, const char *_method, const char *_uri, const char *data,
                         void *user_data);
 void nghttp2_asio_submit_delete(nghttp2_asio_submit* submit);
-int
-nghttp2_asio_submit_error(nghttp2_asio_submit *submitCtx, char *u_err, size_t errlen);
+int64_t nghttp2_asio_submit_error(nghttp2_asio_submit *submitCtx);
 
 int
 nghttp2_asio_request_push_headers(nghttp2_asio_submit *req, const char *key, const char *value,

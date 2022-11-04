@@ -52,16 +52,25 @@ function _M:send_body(body)
     return nil, 'Not implemented body type'
 end
 
-function _M:get_error()
-    local buf = base.get_string_buf(errlen)
-    local ret = lib.nghttp2_asio_submit_error(self.handler, buf, errlen)
-    if ret == 0 then
-        return ffi.string(buf)
-    end
-    if ret == 1 then
-        return nil
-    end
-    return "unknown error"
+local nghttp2_http2_err = {
+    [0] = "no_error",
+    "protocol_error",
+    "internal_error",
+    "flow_control_error",
+    "settings_timeout",
+    "stream_closed",
+    "frame_size_error",
+    "refused_stream",
+    "cancel",
+    "compression_error",
+    "connect_error",
+    "enhance_your_calm",
+    "inadequate_security",
+    "http_1_1_required",
+}
+
+local function get_error(msg)
+    return nghttp2_http2_err[tonumber(msg)] or "unknown"
 end
 
 ---@return ngx.http.status_code?,string?
@@ -75,11 +84,21 @@ function _M:submit(read_response_headers, timeout)
         return nil, self.get_client_error(self.client)
     end
     local ok, err = sem:wait(timeout)
-    if not ok then return nil, err end
+    if not ok then
+        ffi.gc(self.handler, nil)
+        -- delete sem handler right now
+        lib.nghttp2_asio_submit_delete(self.handler)
+        return nil, err
+    end
 
     local status_code = lib.nghttp2_asio_response_code(self.handler);
     if status_code == 0 then
-        return nil, self:get_error()
+        local msg = lib.nghttp2_asio_submit_error(self.handler)
+        local NGHTTP2_REFUSED_STREAM = 7
+        if msg == NGHTTP2_REFUSED_STREAM then
+            return nil, "retry"
+        end
+        return nil, get_error(msg)
     end
     return status_code
 end

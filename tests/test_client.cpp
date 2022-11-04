@@ -7,67 +7,112 @@
 #include <iostream>
 
 struct ngx_lua_sema_t {
-    const char *msg;
-    std::promise<void> promise;
+    virtual void poll() = 0;
+
+    virtual  ~ngx_lua_sema_t() {}
 };
 
+struct ngx_lua_sema_msg : ngx_lua_sema_t {
+    const char *msg;
+    nghttp2_asio_submit *ptr;
+
+    void poll() override {
+        if (msg)
+            std::cout << "event:" << msg << std::endl;
+    }
+};
+
+struct ngx_lua_sema_cb : ngx_lua_sema_t {
+    std::function<void(void)> cb;
+
+    void poll() override {
+        cb();
+    }
+};
+
+struct ngx_lua_sema_merge : ngx_lua_sema_t {
+    std::vector<ngx_lua_sema_t> sems;
+
+    void poll() override {
+        for (auto &sem: sems)
+            sem.poll();
+    }
+};
+
+
 int cb(ngx_lua_sema_t *t, int n) {
-    std::cout << "event:" << t->msg << std::endl;
-    t->promise.set_value();
+
+    t->poll();
     return 0;
 }
 
 TEST_CASE("echo server") {
+    auto stop = false;
     auto ctx = nghttp2_asio_init_ctx(cb);
     REQUIRE(ctx != nullptr);
 
-    ngx_lua_sema_t conn_event{
-            "connection"
-    };
+    ngx_lua_sema_cb conn_event;
     auto client = nghttp2_asio_client_new(ctx, "http://localhost:8002", 10, 10,
                                           &conn_event);
     REQUIRE(client != nullptr);
-    bool stop = false;
-    std::thread thread([&]() {
-        while (!stop) {
-            auto size = nghttp2_asio_run(ctx);
-            if (size == -1) {
-                break;
-            }
-            using namespace std::chrono_literals;
-            std::this_thread::sleep_for(10ms);
+    ngx_lua_sema_cb respone_event;
+    conn_event.cb = [&]() {
+        if (!nghttp2_asio_client_is_ready(client)) {
+            char msg[2048];
+            REQUIRE(nghttp2_asio_client_error(client, msg, 2048) == -1);
         }
-    });
-    conn_event.promise.get_future().get();
-    if (!nghttp2_asio_client_is_ready(client)) {
-        char msg[2048];
-        REQUIRE(nghttp2_asio_client_error(client, msg, 2048) == -1);
-    }
 
-    ngx_lua_sema_t respone_event{
-            "submit response"
+        auto submit = nghttp2_asio_submit_new(client, "GET", "http://localhost", nullptr, nullptr);
+        REQUIRE(submit != nullptr);
+
+        nghttp2_asio_client_submit(client, submit, true, &respone_event);
+        respone_event.cb = [=, &stop]() {
+            REQUIRE(nghttp2_asio_response_code(submit) == 200);
+            auto body_length = nghttp2_asio_response_body_length(submit);
+            REQUIRE(body_length == 1);
+
+            auto content_length = nghttp2_asio_response_content_length(submit);
+            REQUIRE(content_length == 388);
+            char msg[1024];
+            auto len = nghttp2_asio_response_content(submit, msg, 1024);
+            REQUIRE(len == 388);
+            REQUIRE(std::string_view(nghttp2_asio_response_body(submit, 0)) == std::string_view(msg, len));
+
+
+            stop = true;
+            nghttp2_asio_submit_delete(submit);
+        };
     };
-    auto submit = nghttp2_asio_submit_new(client, "GET", "http://localhost", nullptr, nullptr);
-    REQUIRE(submit != nullptr);
+    while (!stop)
+        nghttp2_asio_run(ctx);
+    nghttp2_asio_client_delete(client);
+    nghttp2_asio_release_ctx(ctx);
+}
 
-    nghttp2_asio_client_submit(client, submit, true, &respone_event);
-    respone_event.promise.get_future().get();
-    REQUIRE(nghttp2_asio_response_code(submit) == 200);
-    auto body_length = nghttp2_asio_response_body_length(submit);
-    REQUIRE(body_length == 1);
+TEST_CASE("before connection delete"){
+    auto ctx = nghttp2_asio_init_ctx(cb);
+    REQUIRE(ctx != nullptr);
+    ngx_lua_sema_cb conn_event;
+    auto client = nghttp2_asio_client_new(ctx, "http://localhost:8002", 10, 10,
+                                          &conn_event);
+    REQUIRE(client != nullptr);
+    nghttp2_asio_client_delete(client);
+    nghttp2_asio_release_ctx(ctx);
+}
 
-    auto content_length = nghttp2_asio_response_content_length(submit);
-    REQUIRE(content_length == 388);
-    char msg[1024];
-    char msg1[1024];
-    auto len = nghttp2_asio_response_content(submit, msg, 1024);
-    REQUIRE(len == 388);
-    REQUIRE(std::string_view(nghttp2_asio_response_body(submit, 0)) == std::string_view(msg, len));
-
-    stop = true;
-    thread.join();
-
-    nghttp2_asio_submit_delete(submit);
+TEST_CASE("after connection delete"){
+    auto stop = false;
+    auto ctx = nghttp2_asio_init_ctx(cb);
+    REQUIRE(ctx != nullptr);
+    ngx_lua_sema_cb conn_event;
+    auto client = nghttp2_asio_client_new(ctx, "http://localhost:8002", 10, 10,
+                                          &conn_event);
+    REQUIRE(client != nullptr);
+    conn_event.cb = [&]{
+        stop = true;
+    };
+    while (!stop)
+        nghttp2_asio_run(ctx);
     nghttp2_asio_client_delete(client);
     nghttp2_asio_release_ctx(ctx);
 }
