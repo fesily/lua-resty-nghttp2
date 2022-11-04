@@ -8,7 +8,7 @@
             "type": "lua",
             "request": "launch",
             "name": "Debug",
-            "program": "./spec/mulit_submit_spec.lua",
+            "program": "./spec/retry_spec.lua",
             "luaexe": "resty",
             "arg0": [
                 "-e",

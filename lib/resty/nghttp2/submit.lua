@@ -77,7 +77,9 @@ end
 function _M:submit(read_response_headers, timeout)
     assert(not self.submited)
     local sem, err = semaphore.new()
-    if not sem then return nil, err end
+    if not sem then
+        return nil, err
+    end
     self.read_response_headers = read_response_headers
     self.submited = true
     if lib.nghttp2_asio_client_submit(self.client, self.handler, not not read_response_headers, sem.sem) ~= 0 then
@@ -124,12 +126,16 @@ end
 function _M:read_headers()
     if self.read_response_headers then
         local len = lib.nghttp2_asio_response_header_length(self.handler);
-        if len == 0 then return end
+        if len == 0 then
+            return
+        end
         local keys = get_cache_keys(len)
         local values = get_cache_values(len)
         len = lib.nghttp2_asio_response_headers(self.handler, keys, values,
             self.read_response_headers)
-        if len == 0 then return end
+        if len == 0 then
+            return
+        end
         local headers = tab_new(0, len)
         for i = 1, len do
             local key = ffi.string(keys[i - 1])
@@ -146,43 +152,58 @@ function _M:read_bodys()
     local datalen = lib.nghttp2_asio_response_body_length(self.handler);
     if datalen > 0 then
         if datalen == 1 then
-            return lib.nghttp2_asio_response_body(self.handler, 0)
+            local data = lib.nghttp2_asio_response_body(self.handler, 0)
+            if data == nil then
+                return nil, 'cant read body'
+            end
+            return ffi.string(data)
         end
         local bodys = tab_new(datalen, 0)
         for i = 1, datalen, 1 do
             local data = lib.nghttp2_asio_response_body(self.handler, i - 1)
             if data then
-                tab_insert(bodys, data)
+                tab_insert(bodys, ffi.string(data))
             end
         end
         return bodys
     end
 end
 
----@return string?
+---@param maxlength? number
+---@return string?,string?
 function _M:read_body(maxlength)
-    maxlength = maxlength or 4096
     local content_length = lib.nghttp2_asio_response_content_length(self.handler);
-    if content_length > maxlength then
+    if content_length == -1 then
+        local bodys, err = _M.read_bodys(self)
+        if not bodys then
+            return nil, err
+        end
+        if type(bodys) ~= 'table' then
+            return bodys
+        end
+        return table.concat(bodys, "")
+    end
+    if maxlength and content_length > maxlength then
         content_length = maxlength
     end
-    local buf = base.get_string_buf(content_length)
+    local buf = base.get_string_buf(content_length, false)
 
     content_length = lib.nghttp2_asio_response_content(self.handler, buf, content_length)
 
-    if content_length == 0 then return end
+    if content_length == 0 then
+        return nil, 'no body'
+    end
 
     return ffi.string(buf, content_length)
 end
 
-function _M.new(handler, ctx, get_client_error, client)
+function _M.new(handler, get_client_error, client)
     return setmetatable({
         handler = handler,
-        ctx = ctx,
+        get_client_error = get_client_error,
+        client = client,
         read_response_headers = false,
         submited = false,
-        client = client,
-        get_client_error = get_client_error
     }, _mt)
 end
 

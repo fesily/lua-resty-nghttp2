@@ -14,7 +14,6 @@ struct ngx_lua_sema_t {
 
 struct ngx_lua_sema_msg : ngx_lua_sema_t {
     const char *msg;
-    nghttp2_asio_submit *ptr;
 
     void poll() override {
         if (msg)
@@ -26,7 +25,8 @@ struct ngx_lua_sema_cb : ngx_lua_sema_t {
     std::function<void(void)> cb;
 
     void poll() override {
-        cb();
+        if (cb)
+            cb();
     }
 };
 
@@ -89,7 +89,7 @@ TEST_CASE("echo server") {
     nghttp2_asio_release_ctx(ctx);
 }
 
-TEST_CASE("before connection delete"){
+TEST_CASE("before connection delete") {
     auto ctx = nghttp2_asio_init_ctx(cb);
     REQUIRE(ctx != nullptr);
     ngx_lua_sema_cb conn_event;
@@ -100,7 +100,7 @@ TEST_CASE("before connection delete"){
     nghttp2_asio_release_ctx(ctx);
 }
 
-TEST_CASE("after connection delete"){
+TEST_CASE("after connection delete") {
     auto stop = false;
     auto ctx = nghttp2_asio_init_ctx(cb);
     REQUIRE(ctx != nullptr);
@@ -108,11 +108,37 @@ TEST_CASE("after connection delete"){
     auto client = nghttp2_asio_client_new(ctx, "http://localhost:8002", 10, 10,
                                           &conn_event);
     REQUIRE(client != nullptr);
-    conn_event.cb = [&]{
+    conn_event.cb = [&] {
         stop = true;
     };
     while (!stop)
         nghttp2_asio_run(ctx);
     nghttp2_asio_client_delete(client);
+    nghttp2_asio_release_ctx(ctx);
+}
+
+TEST_CASE("memory") {
+    auto stop = false;
+    auto ctx = nghttp2_asio_init_ctx(cb);
+    REQUIRE(ctx != nullptr);
+    ngx_lua_sema_cb conn_event;
+    auto client = nghttp2_asio_client_new(ctx, "http://localhost:8002", 10, 10,
+                                          &conn_event);
+    REQUIRE(client != nullptr);
+    nghttp2_asio_submit* submit;
+    ngx_lua_sema_msg respone_event;
+    respone_event.msg="123";
+    conn_event.cb = [&] {
+        submit = nghttp2_asio_submit_new(client, "GET", "http://localhost", nullptr, nullptr);
+        REQUIRE(submit != nullptr);
+
+        nghttp2_asio_client_submit(client, submit, true, &respone_event);
+
+        nghttp2_asio_client_delete(client);
+        stop = true;
+    };
+    while (!stop)
+        nghttp2_asio_run(ctx);
+    nghttp2_asio_submit_delete(submit);
     nghttp2_asio_release_ctx(ctx);
 }

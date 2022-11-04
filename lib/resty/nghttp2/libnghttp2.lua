@@ -5,7 +5,7 @@
 ---
 require 'ffi.loader'
 local ffi = require("ffi")
-ffi.cdef[[
+ffi.cdef [[
     typedef void ngx_lua_sema_t;
     typedef int (*ngx_lua_ffi_sema_post)(ngx_lua_sema_t *, int);
     typedef ssize_t (*submit_request_data_cb)(uint8_t *buf, size_t len,
@@ -58,5 +58,25 @@ ffi.cdef[[
     nghttp2_asio_response_headers(nghttp2_asio_submit *submitCtx, const char **headers_key,
                                   const char **headers_value, size_t len);
 ]]
-
-return ffi.load('resty_nghttp2')
+---@class libnghttp2
+---@field nghttp2_asio_request_push_headers function
+---@field nghttp2_asio_request_set_body function
+---@field nghttp2_asio_init_ctx function
+---@field nghttp2_asio_release_ctx function
+---@field nghttp2_asio_client_submit function
+---@field nghttp2_asio_submit_delete function
+---@field nghttp2_asio_submit_error function
+---@field nghttp2_asio_response_code function
+---@field nghttp2_asio_response_body_length function
+---@field nghttp2_asio_response_body function
+---@field nghttp2_asio_response_header_length function
+---@field nghttp2_asio_response_headers function
+---@field nghttp2_asio_response_content_length function
+---@field nghttp2_asio_response_content function
+---@field nghttp2_asio_client_error function
+---@field nghttp2_asio_client_new function
+---@field nghttp2_asio_client_delete function
+---@field nghttp2_asio_client_is_ready function
+---@field nghttp2_asio_submit_new function
+local lib = ffi.load('resty_nghttp2')
+return lib

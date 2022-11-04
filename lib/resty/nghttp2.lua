@@ -4,43 +4,21 @@
 --- DateTime: 2022/10/31 10:48
 ---
 local semaphore = require 'ngx.semaphore'
-local lib = require 'resty.nghttp2.libnghttp2'
 local ffi = require 'ffi'
 local base = require 'resty.core.base'
+local lib = require 'resty.nghttp2.libnghttp2'
 local submit = require 'resty.nghttp2.submit'
+local ctx = require 'lib.resty.nghttp2.ctx'
 
 local _M = {}
 local _mt = {
     __index = _M
 }
-local subsystem = ngx.config.subsystem
-local C = ffi.C
-local ngx_lua_ffi_sema_post
-if subsystem == 'http' then
-    ngx_lua_ffi_sema_post = C.ngx_http_lua_ffi_sema_post
-
-elseif subsystem == 'stream' then
-    ngx_lua_ffi_sema_post = C.ngx_stream_lua_ffi_sema_post
-end
-
 
 local errlen = 1024
 
-local function get_error(ctx)
-    local buf = base.get_string_buf(errlen)
-    local ret = lib.nghttp2_asio_error(ctx, buf, errlen)
-
-    if ret == 0 then
-        return ffi.string(buf)
-    end
-    if ret == 1 then
-        return nil
-    end
-    return "unknown error"
-end
-
 local function get_client_error(client)
-    local buf = base.get_string_buf(errlen)
+    local buf = base.get_string_buf(errlen, false)
     local ret = lib.nghttp2_asio_client_error(client, buf, errlen)
     if ret == 0 then
         return ffi.string(buf)
@@ -51,61 +29,23 @@ local function get_client_error(client)
     return "unknown error"
 end
 
-local tick = 0
-local nghttp2_ctx
-local function timer(p)
-    if p then
-        nghttp2_ctx = nil
-        return
-    end
-    local count = 0
-    while nghttp2_ctx do
-        if lib.nghttp2_asio_run(nghttp2_ctx) > 0 then
-            local err = get_error(nghttp2_ctx)
-            if err then
-                ngx.log(ngx.ERR, "nghttp2 run err:", err)
-            end
-        end
-        ngx.sleep(tick)
-        count = count + 1
-        if count > 100 then
-            break
-        end
-    end
-    ngx.timer.at(tick, timer, nghttp2_ctx)
-end
-
-function _M.init_ctx()
-    if nghttp2_ctx then
-        return true
-    end
-    local ctx = lib.nghttp2_asio_init_ctx(ngx_lua_ffi_sema_post)
-    if ctx == nil then
-        error('Could not initialize nghttp2_asio_client')
-    end
-    ffi.gc(ctx, lib.nghttp2_asio_release_ctx)
-    ngx.timer.at(tick, timer, ctx)
-    nghttp2_ctx = ctx
-    return true
-end
-
-function _M.release_ctx()
-    if not nghttp2_ctx then
-        return
-    end
-    nghttp2_ctx = nil
-end
-
+---@param uri string
+---@param connection_timeout? number
+---@param read_timeout? number
 function _M.new(uri, connection_timeout, read_timeout)
+    local nghttp2_ctx, err = ctx.init_ctx()
     if not nghttp2_ctx then
-        local ok, err = _M.init_ctx()
-        if not ok then
-            return nil, err
-        end
+        return nil, err
     end
+
     if not uri then
         return nil, 'uri is required'
     end
+
+    if ctx.clients[uri] then
+        return ctx.clients[uri]
+    end
+
     connection_timeout = connection_timeout or 10;
     read_timeout = read_timeout or 10;
     local sem, err = semaphore.new()
@@ -114,31 +54,69 @@ function _M.new(uri, connection_timeout, read_timeout)
         return true
     end
 
-    local client = lib.nghttp2_asio_client_new(nghttp2_ctx, uri, read_timeout, connection_timeout, sem.sem)
-    if client == nil then
-        return nil, get_error(nghttp2_ctx)
+    local handler = lib.nghttp2_asio_client_new(nghttp2_ctx, uri, read_timeout, connection_timeout, sem.sem)
+    if handler == nil then
+        return nil, ctx.get_error(nghttp2_ctx)
     end
 
     local ok, err = sem:wait(connection_timeout)
     if not ok then
-        lib.nghttp2_asio_client_delete(client)
+        lib.nghttp2_asio_client_delete(handler)
         return nil, err
     end
-    ffi.gc(client, lib.nghttp2_asio_client_delete)
+    ffi.gc(handler, lib.nghttp2_asio_client_delete)
 
-    if not lib.nghttp2_asio_client_is_ready(client) then
-        return nil, get_client_error(client)
+    if not lib.nghttp2_asio_client_is_ready(handler) then
+        return nil, get_client_error(handler)
     end
-    return setmetatable({ client = client, sem = sem }, _mt)
+    local client = setmetatable({
+        nghttp2_ctx,
+        handler = handler,
+        uri = uri,
+        read_timeout = read_timeout,
+        connection_timeout = connection_timeout
+    }, _mt)
+    ctx.clients[uri] = client
+    return client
 end
 
+---@param method "GET"|"POST"|"PUT"|"DELETE"
+---@param uri string
+---@param data? string
 function _M:new_submit(method, uri, data)
-    local handler = lib.nghttp2_asio_submit_new(self.client, method, uri, data, nil)
+    local handler = lib.nghttp2_asio_submit_new(self.handler, method, uri, data, nil)
     if handler == nil then
         return nil, 'can\' create submit'
     end
     ffi.gc(handler, lib.nghttp2_asio_submit_delete)
-    return submit.new(handler, nghttp2_ctx, get_error, self.client)
+    return submit.new(handler, get_client_error, self.handler)
+end
+
+function _M:restart()
+    ctx.clients[self.uri] = nil
+    return _M.new(self.uri, self.connection_timeout, self.read_timeout)
+end
+
+---@param method "GET"|"POST"|"PUT"|"DELETE"
+---@param uri string
+---@param data? string
+---@param read_headers? boolean
+---@param timeout? number
+function _M:request(method, uri, headers, data, read_headers, timeout)
+    local submit, err = _M.new_submit(self, method, uri, data)
+    if not submit then
+        return nil, err
+    end
+    submit:send_headers(headers)
+    local status_code, err = submit:submit(read_headers, timeout or 10)
+    if not status_code then
+        if err == 'retry' then
+            local client, err = self:restart()
+            if not client then return nil, err end
+            return client:submit(method, uri, headers, data, read_headers, timeout)
+        end
+    end
+    return submit
 end
 
 return _M

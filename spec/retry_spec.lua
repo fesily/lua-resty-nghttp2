@@ -1,0 +1,5 @@
+it('restart', function()
+    local nghttp2 = require('resty.nghttp2')
+    local client = assert(nghttp2.new('http://127.0.0.1:8002'))
+    assert.Not.equal(client:restart(), client)
+end)
