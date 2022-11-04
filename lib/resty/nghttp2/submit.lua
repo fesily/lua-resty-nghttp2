@@ -82,9 +82,13 @@ function _M:submit(read_response_headers, timeout)
     end
     self.read_response_headers = read_response_headers
     self.submited = true
-    if lib.nghttp2_asio_client_submit(self.client, self.handler, not not read_response_headers, sem.sem) ~= 0 then
-        return nil, self.get_client_error(self.client)
+    do
+        local ret = lib.nghttp2_asio_client_submit(self.client, self.handler, not not read_response_headers, sem.sem)
+        if ret ~= 0 then
+            return nil, self.get_client_error(self.client)
+        end
     end
+
     local ok, err = sem:wait(timeout)
     if not ok then
         ffi.gc(self.handler, nil)

@@ -74,7 +74,8 @@ function _M.new(uri, connection_timeout, read_timeout)
         handler = handler,
         uri = uri,
         read_timeout = read_timeout,
-        connection_timeout = connection_timeout
+        connection_timeout = connection_timeout,
+        invaild = false,
     }, _mt)
     ctx.clients[uri] = client
     return client
@@ -84,6 +85,10 @@ end
 ---@param uri string
 ---@param data? string
 function _M:new_submit(method, uri, data)
+    if not lib.nghttp2_asio_client_is_ready(self.handler) then
+        -- session is stopped,so we need create a new session
+        return nil, 'retry'
+    end
     local handler = lib.nghttp2_asio_submit_new(self.handler, method, uri, data, nil)
     if handler == nil then
         return nil, 'can\' create submit'
@@ -93,29 +98,42 @@ function _M:new_submit(method, uri, data)
 end
 
 function _M:restart()
+    self.invaild = true
     ctx.clients[self.uri] = nil
     return _M.new(self.uri, self.connection_timeout, self.read_timeout)
 end
 
+local function retry(self, method, uri, headers, data, read_headers, timeout)
+    local client, err = self:restart()
+    if not client then return nil, err end
+    return client:request(method, uri, headers, data, read_headers, timeout)
+end
+
 ---@param method "GET"|"POST"|"PUT"|"DELETE"
 ---@param uri string
+---@param headers? table<string,string>
 ---@param data? string
 ---@param read_headers? boolean
 ---@param timeout? number
 function _M:request(method, uri, headers, data, read_headers, timeout)
     local submit, err = _M.new_submit(self, method, uri, data)
     if not submit then
+        if err == 'retry' then
+            return retry(self, method, uri, headers, data, read_headers, timeout)
+        end
         return nil, err
     end
-    submit:send_headers(headers)
+    if headers then
+        submit:send_headers(headers)
+    end
     local status_code, err = submit:submit(read_headers, timeout or 10)
     if not status_code then
         if err == 'retry' then
-            local client, err = self:restart()
-            if not client then return nil, err end
-            return client:request(method, uri, headers, data, read_headers, timeout)
+            return retry(self, method, uri, headers, data, read_headers, timeout)
         end
+        return nil, err
     end
+
     submit.status = status_code
     submit.has_body = submit:bodys_length() > 0
     return submit

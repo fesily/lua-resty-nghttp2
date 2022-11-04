@@ -30,15 +30,9 @@ struct nghttp2_asio_client : std::enable_shared_from_this<nghttp2_asio_client> {
 
     }
 
-    enum class status : uint8_t {
-        none,
-        init,
-        ready,
-    };
 #if ENABLE_HTTPS
     std::optional<boost::asio::ssl::context> tls_ctx;
 #endif
-    status status = status::none;
     session session;
     std::string uri;
     std::string scheme, host, service;
@@ -48,13 +42,11 @@ struct nghttp2_asio_client : std::enable_shared_from_this<nghttp2_asio_client> {
     nghttp2_asio_ctx *ctx;
 
     ~nghttp2_asio_client() {
-        if (is_ready()) {
-            session.shutdown();
-        }
+        session.shutdown();
     }
 
     bool is_ready() {
-        return status == status::ready;
+        return !session.stopped();
     }
 
     void post_event(ngx_lua_sema_t *event) {
@@ -62,8 +54,10 @@ struct nghttp2_asio_client : std::enable_shared_from_this<nghttp2_asio_client> {
     }
 
     void post_connection_event() {
-        if (ngx_connection_event)
+        if (ngx_connection_event) {
             post_event_cb(ngx_connection_event, 1);
+            ngx_connection_event = nullptr;
+        }
     }
 };
 
@@ -151,6 +145,7 @@ BOOST_SYMBOL_EXPORT int nghttp2_asio_error(nghttp2_asio_ctx *ctx, char *u_err, s
         return -1;
     if (ctx->ec) {
         auto ec = std::move(ctx->ec);
+        ctx->ec.clear();
         return ec.message(u_err, errlen) != nullptr ? 0 : -1;
     }
     return 1;
@@ -207,11 +202,9 @@ nghttp2_asio_client_new(nghttp2_asio_ctx *ctx, const char *c_uri, double read_ti
             client->post_event_cb = ctx->post_event_cb;
             client->ctx = ctx;
         }
-        client->status = nghttp2_asio_client::status::init;
         auto &sess = client->session;
         sess.read_timeout(boost::posix_time::milliseconds(size_t(read_timeout * 1000)));
         sess.on_connect([client](auto &&d) {
-            client->status = nghttp2_asio_client::status::ready;
             client->post_connection_event();
         });
 
@@ -248,6 +241,7 @@ BOOST_SYMBOL_EXPORT int nghttp2_asio_client_error(nghttp2_asio_client *client, c
         return -1;
     if (client->ec) {
         auto ec = std::move(client->ec);
+        client->ec.clear();
         return ec.message(u_err, errlen) != nullptr ? 0 : -1;
     }
     return 1;
@@ -335,8 +329,9 @@ nghttp2_asio_client_submit(nghttp2_asio_client *client, nghttp2_asio_submit *sub
         return -1;
 
     TRY
+        if (client->ec)
+            return -1;
         auto &ec = client->ec;
-
 
         const request *req;
 
@@ -344,15 +339,14 @@ nghttp2_asio_client_submit(nghttp2_asio_client *client, nghttp2_asio_submit *sub
             req = client->session.submit(ec, submitCtx->method, submitCtx->uri, submitCtx->headers,
                                          submitCtx->spec);
         else {
-
-            req = std::visit([&](auto &&arg) -> const request * {
-                                 return client->session.submit(ec, submitCtx->method, submitCtx->uri, arg, submitCtx->headers,
-                                                               submitCtx->spec);
-                             },
-                             submitCtx->data.value());
+            req = std::visit(
+                    [&](auto &&arg) -> const request * {
+                        return client->session.submit(ec, submitCtx->method, submitCtx->uri, arg, submitCtx->headers,
+                                                      submitCtx->spec);
+                    }, submitCtx->data.value());
         }
         if (!req) {
-            return -1;
+            return 1;
         }
 
         req->on_response([submitCtx, need_headers](const response &response) {
