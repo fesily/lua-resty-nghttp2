@@ -8,7 +8,7 @@ local ffi = require 'ffi'
 local base = require 'resty.core.base'
 local lib = require 'resty.nghttp2.libnghttp2'
 local submit = require 'resty.nghttp2.submit'
-local ctx = require 'lib.resty.nghttp2.ctx'
+local ctx = require 'resty.nghttp2.ctx'
 
 local _M = {}
 local _mt = {
