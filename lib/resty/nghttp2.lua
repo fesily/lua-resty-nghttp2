@@ -44,7 +44,7 @@ function _M.new(uri, connection_timeout, read_timeout)
 
     if ctx.clients[uri] then
         local client = ctx.clients[uri]
-        if lib.nghttp2_asio_client_is_ready(client) then
+        if lib.nghttp2_asio_client_is_ready(client.handler) then
             return client
         end
     end
@@ -106,33 +106,36 @@ function _M:restart()
     return _M.new(self.uri, self.connection_timeout, self.read_timeout)
 end
 
-local function retry(self, method, uri, headers, data, read_headers, timeout)
+local function retry(self, opts)
     local client, err = self:restart()
     if not client then return nil, err end
-    return client:request(method, uri, headers, data, read_headers, timeout)
+    return client:request(opts)
 end
 
----@param method "GET"|"POST"|"PUT"|"DELETE"
----@param uri string
----@param headers? table<string,string>
----@param data? string
----@param read_headers? boolean
----@param timeout? number
-function _M:request(method, uri, headers, data, read_headers, timeout)
+function _M:request(opts)
+    if not opts then
+        return nil, 'invalid options'
+    end
+    local method = opts.method or "GET"
+    local uri = opts.uri or "/"
+    local headers = opts.headers
+    local data = opts.data
+    local read_headers = opts.read_headers or false
+    local timeout = opts.timeout or 1
     local submit, err = _M.new_submit(self, method, uri, data)
     if not submit then
         if err == 'retry' then
-            return retry(self, method, uri, headers, data, read_headers, timeout)
+            return retry(self, opts)
         end
         return nil, err
     end
     if headers then
         submit:send_headers(headers)
     end
-    local status_code, err = submit:submit(read_headers, timeout or 10)
+    local status_code, err = submit:submit(read_headers, timeout)
     if not status_code then
         if err == 'retry' then
-            return retry(self, method, uri, headers, data, read_headers, timeout)
+            return retry(self, opts)
         end
         return nil, err
     end

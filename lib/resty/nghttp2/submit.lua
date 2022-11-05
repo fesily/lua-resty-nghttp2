@@ -29,13 +29,17 @@ function _M:send_headers(headers)
             end
             local key = tostring(v[0])
             local value = tostring(v[1])
-            local sensitive = tostring(v[3])
+            if key ~= 'host' then
+                local sensitive = tostring(v[3])
 
-            lib.nghttp2_asio_request_push_headers(self.handler, key, value, sensitive)
+                lib.nghttp2_asio_request_push_headers(self.handler, key, value, sensitive)
+            end
         end
     else
         for k, v in pairs(headers) do
-            lib.nghttp2_asio_request_push_headers(self.handler, tostring(k), tostring(v), false)
+            if k ~= 'host' then
+                lib.nghttp2_asio_request_push_headers(self.handler, tostring(k), tostring(v), false)
+            end
         end
     end
     return true
@@ -154,6 +158,7 @@ end
 function _M:bodys_length()
     return lib.nghttp2_asio_response_body_length(self.handler)
 end
+
 ---@return string[]|string?
 function _M:read_bodys()
     local datalen = lib.nghttp2_asio_response_body_length(self.handler);
