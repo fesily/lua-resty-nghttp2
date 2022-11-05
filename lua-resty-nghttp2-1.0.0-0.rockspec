@@ -11,9 +11,12 @@ dependencies = {
     "luajit-ffi-loader = 1.0.0-0"
 }
 build = {
-    type = "cmake",
-    variables = {
-        CMAKE_BUILD_TYPE = "RelWithDebInfo",
+    type = "make",
+    build_variables = {
+        LUA_PATH = "$(LUADIR)",
+        LUA_CPATH = "$(LIBDIR)",
+    },
+    install_variables = {
         CMAKE_INSTALL_PREFIX = "$(PREFIX)",
         LUA_PATH = "$(LUADIR)",
         LUA_CPATH = "$(LIBDIR)",
