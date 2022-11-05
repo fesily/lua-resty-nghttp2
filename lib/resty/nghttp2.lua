@@ -43,7 +43,10 @@ function _M.new(uri, connection_timeout, read_timeout)
     end
 
     if ctx.clients[uri] then
-        return ctx.clients[uri]
+        local client = ctx.clients[uri]
+        if lib.nghttp2_asio_client_is_ready(client) then
+            return client
+        end
     end
 
     connection_timeout = connection_timeout or 10;
@@ -69,14 +72,15 @@ function _M.new(uri, connection_timeout, read_timeout)
     if not lib.nghttp2_asio_client_is_ready(handler) then
         return nil, get_client_error(handler)
     end
+
     local client = setmetatable({
         nghttp2_ctx,
         handler = handler,
         uri = uri,
         read_timeout = read_timeout,
         connection_timeout = connection_timeout,
-        invaild = false,
     }, _mt)
+    -- set error event
     ctx.clients[uri] = client
     return client
 end
@@ -98,7 +102,6 @@ function _M:new_submit(method, uri, data)
 end
 
 function _M:restart()
-    self.invaild = true
     ctx.clients[self.uri] = nil
     return _M.new(self.uri, self.connection_timeout, self.read_timeout)
 end

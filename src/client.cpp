@@ -3,15 +3,13 @@
 //
 
 #include <iostream>
-
-#include <nghttp2/asio_http2_client.h>
-#include <nghttp2/asio_http2.h>
-
 #include <optional>
 #include <variant>
+#include <list>
+
+#include <nghttp2/asio_http2_client.h>
 
 #include "resty_nghttp2.h"
-#include <list>
 
 using boost::asio::ip::tcp;
 
@@ -82,7 +80,7 @@ struct nghttp2_asio_submit {
     std::vector<std::string> response_data;
 
     void *user_data;
-    const request *req;
+    const request *req; // will delete stream ctx before call on_close
     std::shared_ptr<nghttp2_asio_client> client;
 };
 
@@ -221,29 +219,34 @@ nghttp2_asio_client_new(nghttp2_asio_ctx *ctx, const char *c_uri, double read_ti
     return nullptr;
 }
 
+
 BOOST_SYMBOL_EXPORT void nghttp2_asio_client_delete(nghttp2_asio_client *client) {
-    auto ctx = client->ctx;
-    // unlink
-    client->session.on_connect(nullptr);
-    client->session.on_error(nullptr);
-    if (client->is_ready())
-        client->session.shutdown();
-    auto iter = std::find_if(ctx->clients.cbegin(), ctx->clients.cend(), [client](auto ptr) {
-        return ptr.get() == client;
-    });
-    if (iter != ctx->clients.end()) {
-        ctx->clients.erase(iter);
-    }
+    TRY
+        auto ctx = client->ctx;
+        // unlink
+        client->session.on_connect(nullptr);
+        client->session.on_error(nullptr);
+        if (client->is_ready())
+            client->session.shutdown();
+        auto iter = std::find_if(ctx->clients.cbegin(), ctx->clients.cend(), [client](auto ptr) {
+            return ptr.get() == client;
+        });
+        if (iter != ctx->clients.end()) {
+            ctx->clients.erase(iter);
+        }
+    DEFAULT_CATCH
 }
 
 BOOST_SYMBOL_EXPORT int nghttp2_asio_client_error(nghttp2_asio_client *client, char *u_err, size_t errlen) {
-    if (!client)
-        return -1;
-    if (client->ec) {
-        auto ec = std::move(client->ec);
-        client->ec.clear();
-        return ec.message(u_err, errlen) != nullptr ? 0 : -1;
-    }
+    TRY
+        if (!client)
+            return -1;
+        if (client->ec) {
+            auto ec = std::move(client->ec);
+            client->ec.clear();
+            return ec.message(u_err, errlen) != nullptr ? 0 : -1;
+        }
+    DEFAULT_CATCH
     return 1;
 }
 
@@ -273,14 +276,16 @@ nghttp2_asio_submit_new(nghttp2_asio_client *client, const char *_method, const 
 }
 
 BOOST_SYMBOL_EXPORT void nghttp2_asio_submit_delete(nghttp2_asio_submit *submit) {
-    if (submit) {
-        if (submit->req) {
-            submit->req->on_response(nullptr);
-            submit->req->on_close(nullptr);
-            submit->req->cancel(NGHTTP2_NO_ERROR);
+    TRY
+        if (submit) {
+            if (submit->req) {
+                submit->req->on_response(nullptr);
+                submit->req->on_close(nullptr);
+                submit->req->cancel(NGHTTP2_NO_ERROR);
+            }
+            delete submit;
         }
-        delete submit;
-    }
+    DEFAULT_CATCH
 }
 
 BOOST_SYMBOL_EXPORT int
@@ -329,8 +334,6 @@ nghttp2_asio_client_submit(nghttp2_asio_client *client, nghttp2_asio_submit *sub
         return -1;
 
     TRY
-        if (client->ec)
-            return -1;
         auto &ec = client->ec;
 
         const request *req;
@@ -353,7 +356,8 @@ nghttp2_asio_client_submit(nghttp2_asio_client *client, nghttp2_asio_submit *sub
             submitCtx->status_code = response.status_code();
             submitCtx->content_length = response.content_length();
             if (need_headers) {
-                submitCtx->headers = response.header();
+                // move header map
+                submitCtx->headers = std::move(const_cast<header_map &>(response.header()));
             }
             response.on_data([submitCtx](const uint8_t *data, std::size_t len) {
                 if (data) {
@@ -362,6 +366,7 @@ nghttp2_asio_client_submit(nghttp2_asio_client *client, nghttp2_asio_submit *sub
                 }
             });
         });
+
         req->on_close([sem, submitCtx](uint32_t error_code) {
             submitCtx->req = nullptr;
             submitCtx->error_code = error_code;
