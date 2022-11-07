@@ -116,7 +116,7 @@ target_include_directories(resty_nghttp2 PRIVATE ${OpenSSL_INCLUDE_DIR} ${Boost_
 
 set_target_properties(resty_nghttp2 PROPERTIES VERSION ${PROJECT_VERSION} SOVERSION ${PROJECT_VERSION_MAJOR})
 
-target_link_libraries(resty_nghttp2 PRIVATE c++ nghttp2_asio OpenSSL::SSL OpenSSL::Crypto)
+target_link_libraries(resty_nghttp2 PRIVATE nghttp2_asio OpenSSL::SSL OpenSSL::Crypto)
 
 if (TESTS)
     add_subdirectory(tests)
