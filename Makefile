@@ -18,8 +18,8 @@ make:
 .PYTHON: install
 install: 
 	cd build.luarocks && cmake -DCMAKE_INSTALL_PREFIX=${CMAKE_INSTALL_PREFIX} -DLUA_PATH=${LUA_PATH} -DLUA_CPATH=${LUA_CPATH} -P cmake_install.cmake
-	mv -f ${LIB_NAME} ${TMP_DIR}/1 ${CMAKE_INSTALL_PREFIX}/lib/libresty_nghttp2.${EXT}
-	mv -f ${LIB_NAME2} ${TMP_DIR}/2 ${CMAKE_INSTALL_PREFIX}/lib/libnghttp2_asio.${EXT}
+	mv -f ${LIB_NAME} ${TMP_DIR}/1
+	mv -f ${LIB_NAME2} ${TMP_DIR}/2
 	mkdir ${TMP_DIR}
 	rm -f ${CMAKE_INSTALL_PREFIX}/lib/libresty_nghttp2.*
 	rm -f ${CMAKE_INSTALL_PREFIX}/lib/libnghttp2_asio.*
