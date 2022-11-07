@@ -114,8 +114,6 @@ add_library(resty_nghttp2 SHARED ${SOURCES})
 
 target_include_directories(resty_nghttp2 PRIVATE ${OpenSSL_INCLUDE_DIR} ${Boost_INCLUDE_DIR})
 
-set_target_properties(resty_nghttp2 PROPERTIES VERSION ${PROJECT_VERSION} SOVERSION ${PROJECT_VERSION_MAJOR})
-
 target_link_libraries(resty_nghttp2 PRIVATE nghttp2_asio OpenSSL::SSL OpenSSL::Crypto)
 
 if (TESTS)
