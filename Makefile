@@ -3,10 +3,11 @@ EXT = so
 ifeq ($(OS), Darwin)
 	EXT = dylib
 endif
+PWD := $(shell pwd)
 
 .PYTHON: make
 make:
-	cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo -DLUA_PATH=${LUA_PATH} -DLUA_CPATH=${LUA_CPATH} -S `pwd` -B `pwd`/build.luarocks
+	cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo -DLUA_PATH=${LUA_PATH} -DLUA_CPATH=${LUA_CPATH} -S ${PWD} -B ${PWD}/build.luarocks
 	cd build.luarocks && make -j10
 
 .PYTHON: install
