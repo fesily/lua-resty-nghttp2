@@ -3,6 +3,7 @@
 //
 
 #include <iostream>
+#include <memory>
 #include <optional>
 #include <variant>
 #include <list>
@@ -24,30 +25,30 @@ struct nghttp2_asio_ctx;
 
 struct nghttp2_asio_client : std::enable_shared_from_this<nghttp2_asio_client> {
 
-    nghttp2_asio_client(session &&session) : session(std::move(session)) {
+    explicit nghttp2_asio_client(session &&session) : ses(std::move(session)) {
 
     }
 
 #if ENABLE_HTTPS
     std::optional<boost::asio::ssl::context> tls_ctx;
 #endif
-    session session;
+    session ses;
     std::string uri;
     std::string scheme, host, service;
-    ngx_lua_sema_t *ngx_connection_event;
+    ngx_lua_sema_t *ngx_connection_event{};
     boost::system::error_code ec;
-    ngx_lua_ffi_sema_post post_event_cb;
-    nghttp2_asio_ctx *ctx;
+    ngx_lua_ffi_sema_post post_event_cb{};
+    nghttp2_asio_ctx *ctx{};
 
     ~nghttp2_asio_client() {
-        session.shutdown();
+        ses.shutdown();
     }
 
-    bool is_ready() {
-        return !session.stopped();
+    bool is_ready() const {
+        return !ses.stopped();
     }
 
-    void post_event(ngx_lua_sema_t *event) {
+    void post_event(ngx_lua_sema_t *event) const {
         post_event_cb(event, 1);
     }
 
@@ -142,7 +143,7 @@ BOOST_SYMBOL_EXPORT int nghttp2_asio_error(nghttp2_asio_ctx *ctx, char *u_err, s
     if (!ctx || ctx->io_service.stopped())
         return -1;
     if (ctx->ec) {
-        auto ec = std::move(ctx->ec);
+        auto ec = ctx->ec;
         ctx->ec.clear();
         return ec.message(u_err, errlen) != nullptr ? 0 : -1;
     }
@@ -172,10 +173,10 @@ nghttp2_asio_client_new(nghttp2_asio_ctx *ctx, const char *c_uri, double read_ti
             // tls_ctx.set_verify_mode(boost::asio::ssl::verify_peer);
             configure_tls_context(ec, tls_ctx);
 
-            client = std::shared_ptr<nghttp2_asio_client>(
-                    new nghttp2_asio_client(session(ctx->io_service, tls_ctx, host, service,
-                                                    boost::posix_time::milliseconds(
-                                                            size_t(connection_timeout * 1000)))));
+            client = std::make_shared<nghttp2_asio_client>(
+                    session(ctx->io_service, tls_ctx, host, service,
+                            boost::posix_time::milliseconds(
+                                    size_t(connection_timeout * 1000))));
             client->tls_ctx = std::move(tls_ctx);
             client->uri = std::move(uri);
             client->scheme = std::move(scheme);
@@ -187,10 +188,10 @@ nghttp2_asio_client_new(nghttp2_asio_ctx *ctx, const char *c_uri, double read_ti
             return nullptr;
 #endif
         } else {
-            client = std::shared_ptr<nghttp2_asio_client>(
-                    new nghttp2_asio_client(session(ctx->io_service, host, service,
-                                                    boost::posix_time::milliseconds(
-                                                            size_t(connection_timeout * 1000)))));
+            client = std::make_shared<nghttp2_asio_client>(
+                    session(ctx->io_service, host, service,
+                            boost::posix_time::milliseconds(
+                                    size_t(connection_timeout * 1000))));
 
             client->uri = std::move(uri);
             client->scheme = std::move(scheme);
@@ -200,7 +201,7 @@ nghttp2_asio_client_new(nghttp2_asio_ctx *ctx, const char *c_uri, double read_ti
             client->post_event_cb = ctx->post_event_cb;
             client->ctx = ctx;
         }
-        auto &sess = client->session;
+        auto &sess = client->ses;
         sess.read_timeout(boost::posix_time::milliseconds(size_t(read_timeout * 1000)));
         sess.on_connect([client](auto &&d) {
             client->post_connection_event();
@@ -224,10 +225,10 @@ BOOST_SYMBOL_EXPORT void nghttp2_asio_client_delete(nghttp2_asio_client *client)
     TRY
         auto ctx = client->ctx;
         // unlink
-        client->session.on_connect(nullptr);
-        client->session.on_error(nullptr);
+        client->ses.on_connect(nullptr);
+        client->ses.on_error(nullptr);
         if (client->is_ready())
-            client->session.shutdown();
+            client->ses.shutdown();
         auto iter = std::find_if(ctx->clients.cbegin(), ctx->clients.cend(), [client](auto ptr) {
             return ptr.get() == client;
         });
@@ -242,7 +243,7 @@ BOOST_SYMBOL_EXPORT int nghttp2_asio_client_error(nghttp2_asio_client *client, c
         if (!client)
             return -1;
         if (client->ec) {
-            auto ec = std::move(client->ec);
+            auto ec = client->ec;
             client->ec.clear();
             return ec.message(u_err, errlen) != nullptr ? 0 : -1;
         }
@@ -339,13 +340,13 @@ nghttp2_asio_client_submit(nghttp2_asio_client *client, nghttp2_asio_submit *sub
         const request *req;
 
         if (!submitCtx->data.has_value())
-            req = client->session.submit(ec, submitCtx->method, submitCtx->uri, submitCtx->headers,
-                                         submitCtx->spec);
+            req = client->ses.submit(ec, submitCtx->method, submitCtx->uri, submitCtx->headers,
+                                     submitCtx->spec);
         else {
             req = std::visit(
                     [&](auto &&arg) -> const request * {
-                        return client->session.submit(ec, submitCtx->method, submitCtx->uri, arg, submitCtx->headers,
-                                                      submitCtx->spec);
+                        return client->ses.submit(ec, submitCtx->method, submitCtx->uri, arg, submitCtx->headers,
+                                                  submitCtx->spec);
                     }, submitCtx->data.value());
         }
         if (!req) {
@@ -441,7 +442,7 @@ nghttp2_asio_response_headers(nghttp2_asio_submit *submitCtx, const char **heade
             headers_key[i] = iter->first.c_str();
             headers_value[i] = iter->second.value.c_str();
         }
-        return len;
+        return (int) len;
     DEFAULT_CATCH
     return -1;
 }
