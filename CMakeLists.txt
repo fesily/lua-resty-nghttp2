@@ -95,7 +95,7 @@ endif()
 
 include(${CPM_DOWNLOAD_LOCATION})
 
-CPMAddPackage(name nghttp2_asio GITHUB_REPOSITORY fesily/nghttp2-asio GIT_TAG e5a3c756a7b35735802c4f7765ce0820493b4df9)
+CPMAddPackage(name nghttp2_asio GITHUB_REPOSITORY fesily/nghttp2-asio GIT_TAG c3ade035c29202e354895fcc22a1dfffb78dbd6b OPTIONS "ENABLE_STATIC_LIB ON" "ENABLE_SHARED_LIB OFF")
 
 if (SANITIZE_ADDRESS)
     add_compile_options(-fsanitize=address)
