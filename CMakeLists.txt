@@ -5,6 +5,7 @@ project(resty_nghttp2 VERSION 1.0.0)
 option(ENABLE_HTTPS "enable https support" OFF)
 option(TESTS "test" OFF)
 option(SANITIZE_ADDRESS "enable sanitize address" OFF)
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 if(CMAKE_C_COMPILER_ID MATCHES "GNU" OR CMAKE_C_COMPILER_ID MATCHES "Clang")
     set(HINT_NORETURN       "__attribute__((noreturn))")
