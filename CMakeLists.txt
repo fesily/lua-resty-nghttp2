@@ -120,6 +120,10 @@ if (TESTS)
     add_subdirectory(tests)
 endif ()
 
+if (LUA_CPATH)
+    set(CMAKE_INSTALL_LIBDIR ${LUA_CPATH})
+endif()
+
 install(TARGETS resty_nghttp2
         ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}"
         LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}"
