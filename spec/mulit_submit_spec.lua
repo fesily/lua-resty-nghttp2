@@ -5,9 +5,9 @@
 ---
 describe("localhost", function()
     local nghttp2 = require 'resty.nghttp2'
-    local client = assert(nghttp2.new("http://127.0.0.1:18090", 1))
+    local client = assert(nghttp2.new("http://127.0.0.1:18090", 10))
     it("send", function()
-        local limit = 50000
+        local limit = 5000
         local t = require 'table.new' (limit, 0);
         local now = os.clock()
         local err_count = 0;
@@ -23,6 +23,35 @@ describe("localhost", function()
                     err_count = err_count + 1
                 end
                 return code
+            end)
+            table.insert(t, co)
+        end
+
+        for i = 1, limit do
+            local ok, res = ngx.thread.wait(t[i])
+            assert.is_true(ok, res)
+        end
+        assert.True(os.clock() - now < 1)
+        assert.equal(err_count, 0)
+    end)
+    it('request', function()
+        local limit = 50000
+        local t = require 'table.new' (limit, 0);
+        local now = os.clock()
+        local err_count = 0;
+        for i = 1, limit, 1 do
+            local co = ngx.thread.spawn(function()
+                local res, err = client:request({
+                    headers = {
+                        hello = 1
+                    },
+                    method = "GET",
+                    uri = "http://127.0.0.1:18090"
+                })
+                if err then
+                    err_count = err_count + 1
+                end
+                return res and res.status
             end)
             table.insert(t, co)
         end
