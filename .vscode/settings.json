@@ -79,6 +79,7 @@
         "typeinfo": "cpp",
         "unordered_map": "cpp",
         "vector": "cpp",
-        "algorithm": "cpp"
+        "algorithm": "cpp",
+        "nghttp2.h": "c"
     }
 }
