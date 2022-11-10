@@ -221,20 +221,16 @@ nghttp2_asio_client_new(nghttp2_asio_ctx *ctx, const char *c_uri, double read_ti
 }
 
 
-BOOST_SYMBOL_EXPORT void nghttp2_asio_client_delete(nghttp2_asio_client *client) {
+BOOST_SYMBOL_EXPORT void nghttp2_asio_client_delete(nghttp2_asio_client *ptr) {
     TRY
+        auto client = ptr->shared_from_this();
         auto ctx = client->ctx;
         // unlink
         client->ses.on_connect(nullptr);
         client->ses.on_error(nullptr);
         if (client->is_ready())
             client->ses.shutdown();
-        auto iter = std::find_if(ctx->clients.cbegin(), ctx->clients.cend(), [client](auto ptr) {
-            return ptr.get() == client;
-        });
-        if (iter != ctx->clients.end()) {
-            ctx->clients.erase(iter);
-        }
+        erase(ctx->clients, client);
     DEFAULT_CATCH
 }
 
