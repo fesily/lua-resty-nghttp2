@@ -225,12 +225,12 @@ BOOST_SYMBOL_EXPORT void nghttp2_asio_client_delete(nghttp2_asio_client *ptr) {
     TRY
         auto client = ptr->shared_from_this();
         auto ctx = client->ctx;
+        erase(ctx->clients, client);
         // unlink
         client->ses.on_connect(nullptr);
         client->ses.on_error(nullptr);
         if (client->is_ready())
             client->ses.shutdown();
-        erase(ctx->clients, client);
     DEFAULT_CATCH
 }
 
