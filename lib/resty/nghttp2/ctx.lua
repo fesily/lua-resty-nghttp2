@@ -16,7 +16,7 @@ local _M = { clients = {} }
 
 local errlen = 1024
 
-local tick = 0
+local tick = 0.0001
 local nghttp2_ctx
 
 local function timer(p)
