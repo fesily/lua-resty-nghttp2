@@ -42,6 +42,7 @@ local function timer(p)
 end
 local function nghttp2_asio_release_ctx(ctx)
     for k, v in pairs(_M.clients) do
+        ffi.gc(v, nil)
         lib.nghttp2_asio_client_delete(v.handler)
     end
     _M.clients = {}
