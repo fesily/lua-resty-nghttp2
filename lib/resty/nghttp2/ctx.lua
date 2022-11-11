@@ -40,7 +40,13 @@ local function timer(p)
     end
     ngx.timer.at(tick, timer, nghttp2_ctx)
 end
-
+local function nghttp2_asio_release_ctx(ctx)
+    for k, v in pairs(_M.clients) do
+        lib.nghttp2_asio_client_delete(v.handler)
+    end
+    _M.clients = {}
+    lib.nghttp2_asio_release_ctx(ctx)
+end
 function _M.init_ctx()
     if nghttp2_ctx then
         return nghttp2_ctx
@@ -49,7 +55,7 @@ function _M.init_ctx()
     if ctx == nil then
         return nil, 'Could not initialize nghttp2_asio_client'
     end
-    ffi.gc(ctx, lib.nghttp2_asio_release_ctx)
+    ffi.gc(ctx, nghttp2_asio_release_ctx)
     ngx.timer.at(tick, timer, ctx)
     nghttp2_ctx = ctx
     return ctx
