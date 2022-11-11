@@ -139,14 +139,19 @@ BOOST_SYMBOL_EXPORT int64_t nghttp2_asio_run(nghttp2_asio_ctx *ctx) {
 }
 
 BOOST_SYMBOL_EXPORT int nghttp2_asio_error(nghttp2_asio_ctx *ctx, char *u_err, size_t errlen) {
-    if (!ctx || ctx->io_service.stopped())
-        return -1;
-    if (ctx->ec) {
-        auto ec = ctx->ec;
-        ctx->ec.clear();
-        return ec.message(u_err, errlen) != nullptr ? 0 : -1;
+    try {
+        if (!ctx)
+            return -1;
+        if (ctx->ec) {
+            auto ec = ctx->ec;
+            ctx->ec.clear();
+            return ec.message(u_err, errlen) != nullptr ? 0 : -1;
+        }
+        return 1;
+    } catch (std::exception &e) {
+        std::snprintf(u_err, errlen, "catch exception:%s", e.what());
     }
-    return 1;
+    return 0;
 }
 
 BOOST_SYMBOL_EXPORT nghttp2_asio_client *

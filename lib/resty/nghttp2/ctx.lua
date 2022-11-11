@@ -16,7 +16,7 @@ local _M = { clients = {} }
 
 local errlen = 1024
 
-local tick = 0.0001
+local tick = 0.001
 local nghttp2_ctx
 
 local function timer(p)
@@ -28,7 +28,7 @@ local function timer(p)
     while nghttp2_ctx do
         if lib.nghttp2_asio_run(nghttp2_ctx) > 0 then
             local err = _M.get_error(nghttp2_ctx)
-            if err then
+            if err ~= 'unknown error' then
                 ngx.log(ngx.ERR, "nghttp2 run err:", err)
             end
         end
@@ -65,7 +65,6 @@ end
 function _M.get_error(ctx)
     local buf = base.get_string_buf(errlen, false)
     local ret = lib.nghttp2_asio_error(ctx, buf, errlen)
-
     if ret == 0 then
         return ffi.string(buf)
     end
