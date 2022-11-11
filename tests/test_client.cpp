@@ -117,6 +117,23 @@ TEST_CASE("after connection delete") {
     nghttp2_asio_release_ctx(ctx);
 }
 
+TEST_CASE("first delete ctx") {
+    auto stop = false;
+    auto ctx = nghttp2_asio_init_ctx(cb);
+    REQUIRE(ctx != nullptr);
+    ngx_lua_sema_cb conn_event;
+    auto client = nghttp2_asio_client_new(ctx, "http://localhost:8002", 10, 10,
+                                          &conn_event);
+    REQUIRE(client != nullptr);
+    conn_event.cb = [&] {
+        stop = true;
+    };
+    while (!stop)
+        nghttp2_asio_run(ctx);
+    nghttp2_asio_release_ctx(ctx);
+    nghttp2_asio_client_delete(client);
+}
+
 TEST_CASE("memory") {
     auto stop = false;
     auto ctx = nghttp2_asio_init_ctx(cb);
@@ -125,9 +142,9 @@ TEST_CASE("memory") {
     auto client = nghttp2_asio_client_new(ctx, "http://localhost:8002", 10, 10,
                                           &conn_event);
     REQUIRE(client != nullptr);
-    nghttp2_asio_submit* submit;
+    nghttp2_asio_submit *submit;
     ngx_lua_sema_msg respone_event;
-    respone_event.msg="123";
+    respone_event.msg = "123";
     conn_event.cb = [&] {
         submit = nghttp2_asio_submit_new(client, "GET", "http://localhost", nullptr, nullptr);
         REQUIRE(submit != nullptr);

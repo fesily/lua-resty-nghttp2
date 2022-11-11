@@ -74,7 +74,6 @@ function _M.new(uri, connection_timeout, read_timeout)
     end
 
     local client = setmetatable({
-        nghttp2_ctx,
         handler = handler,
         uri = uri,
         read_timeout = read_timeout,

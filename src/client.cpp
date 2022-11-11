@@ -23,6 +23,12 @@ using namespace nghttp2::asio_http2::client;
 struct ngx_lua_sema_t;
 struct nghttp2_asio_ctx;
 
+struct nghttp2_asio_ctx : std::enable_shared_from_this<nghttp2_asio_ctx> {
+    boost::asio::io_service io_service;
+    boost::system::error_code ec;
+    ngx_lua_ffi_sema_post post_event_cb = nullptr;
+};
+
 struct nghttp2_asio_client : std::enable_shared_from_this<nghttp2_asio_client> {
 
     explicit nghttp2_asio_client(session &&session) : ses(std::move(session)) {
@@ -38,7 +44,7 @@ struct nghttp2_asio_client : std::enable_shared_from_this<nghttp2_asio_client> {
     ngx_lua_sema_t *ngx_connection_event{};
     boost::system::error_code ec;
     ngx_lua_ffi_sema_post post_event_cb{};
-    nghttp2_asio_ctx *ctx{};
+    std::shared_ptr<nghttp2_asio_ctx> ctx;
 
     bool is_ready() const {
         return !ses.stopped();
@@ -54,14 +60,6 @@ struct nghttp2_asio_client : std::enable_shared_from_this<nghttp2_asio_client> {
             ngx_connection_event = nullptr;
         }
     }
-};
-
-
-struct nghttp2_asio_ctx {
-    boost::asio::io_service io_service;
-    boost::system::error_code ec;
-    ngx_lua_ffi_sema_post post_event_cb = nullptr;
-    std::list<std::shared_ptr<nghttp2_asio_client>> clients;
 };
 
 struct nghttp2_asio_submit {
@@ -91,6 +89,10 @@ struct nghttp2_asio_submit {
         std::cerr << "exception: " << e.what() << "\n"; \
     }
 
+inline auto &get_ctx_map() {
+    static std::map<nghttp2_asio_ctx *, std::shared_ptr<nghttp2_asio_ctx>> m;
+    return m;
+}
 
 extern "C"
 {
@@ -98,9 +100,10 @@ BOOST_SYMBOL_EXPORT nghttp2_asio_ctx *nghttp2_asio_init_ctx(ngx_lua_ffi_sema_pos
     if (!ptr)
         return nullptr;
     TRY
-        auto ctx = new(std::nothrow) nghttp2_asio_ctx{
-                .post_event_cb = ptr};
-        return ctx;
+        auto ctx = std::make_shared<nghttp2_asio_ctx>();
+        ctx->post_event_cb = ptr;
+        get_ctx_map().emplace(ctx.get(), ctx);
+        return ctx.get();
     DEFAULT_CATCH
     return nullptr;
 }
@@ -111,9 +114,7 @@ BOOST_SYMBOL_EXPORT void nghttp2_asio_release_ctx(nghttp2_asio_ctx *ctx) {
     }
     TRY
         ctx->io_service.stop();
-        if (!ctx->clients.empty())
-            std::abort();
-        delete ctx;
+        get_ctx_map().erase(ctx);
     DEFAULT_CATCH
 }
 
@@ -181,7 +182,7 @@ nghttp2_asio_client_new(nghttp2_asio_ctx *ctx, const char *c_uri, double read_ti
             client->host = std::move(host);
             client->service = std::move(service);
             client->post_event_cb = ctx->post_event_cb;
-            client->ctx = ctx;
+            client->ctx = ctx->shared_from_this();
 #else
             return nullptr;
 #endif
@@ -197,7 +198,7 @@ nghttp2_asio_client_new(nghttp2_asio_ctx *ctx, const char *c_uri, double read_ti
             client->service = std::move(service);
             client->ngx_connection_event = event;
             client->post_event_cb = ctx->post_event_cb;
-            client->ctx = ctx;
+            client->ctx = ctx->shared_from_this();
         }
         auto &sess = client->ses;
         sess.read_timeout(boost::posix_time::milliseconds(size_t(read_timeout * 1000)));
@@ -210,9 +211,7 @@ nghttp2_asio_client_new(nghttp2_asio_ctx *ctx, const char *c_uri, double read_ti
             client->post_connection_event();
         });
 
-        auto ptr = client.get();
-        ctx->clients.push_back(std::move(client));
-        return ptr;
+        return client.get();
 
     DEFAULT_CATCH
     return nullptr;
@@ -221,14 +220,14 @@ nghttp2_asio_client_new(nghttp2_asio_ctx *ctx, const char *c_uri, double read_ti
 
 BOOST_SYMBOL_EXPORT void nghttp2_asio_client_delete(nghttp2_asio_client *ptr) {
     TRY
+        // keep ctx alive
+        auto ctx = ptr->ctx;
         auto client = ptr->shared_from_this();
-        auto ctx = client->ctx;
-        erase(ctx->clients, client);
         // unlink
         client->ses.on_connect(nullptr);
         client->ses.on_error(nullptr);
-            if (client->is_ready())
-                client->ses.shutdown();
+        if (client->is_ready())
+            client->ses.shutdown();
     DEFAULT_CATCH
 }
 
