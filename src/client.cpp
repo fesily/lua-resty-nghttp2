@@ -40,10 +40,6 @@ struct nghttp2_asio_client : std::enable_shared_from_this<nghttp2_asio_client> {
     ngx_lua_ffi_sema_post post_event_cb{};
     nghttp2_asio_ctx *ctx{};
 
-    ~nghttp2_asio_client() {
-        ses.shutdown();
-    }
-
     bool is_ready() const {
         return !ses.stopped();
     }
@@ -115,6 +111,8 @@ BOOST_SYMBOL_EXPORT void nghttp2_asio_release_ctx(nghttp2_asio_ctx *ctx) {
     }
     TRY
         ctx->io_service.stop();
+        if (!ctx->clients.empty())
+            std::abort();
         delete ctx;
     DEFAULT_CATCH
 }
@@ -229,8 +227,8 @@ BOOST_SYMBOL_EXPORT void nghttp2_asio_client_delete(nghttp2_asio_client *ptr) {
         // unlink
         client->ses.on_connect(nullptr);
         client->ses.on_error(nullptr);
-        if (client->is_ready())
-            client->ses.shutdown();
+            if (client->is_ready())
+                client->ses.shutdown();
     DEFAULT_CATCH
 }
 
