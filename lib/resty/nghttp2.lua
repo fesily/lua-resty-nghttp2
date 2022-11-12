@@ -21,7 +21,8 @@ local function get_client_error(client)
     local buf = base.get_string_buf(errlen, false)
     local ret = lib.nghttp2_asio_client_error(client, buf, errlen)
     if ret == 0 then
-        return ffi.string(buf)
+        local err = ffi.string(buf)
+        return #err > 0 and err or nil
     end
     if ret == 1 then
         return

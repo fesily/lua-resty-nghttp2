@@ -28,7 +28,7 @@ local function timer(p)
     while nghttp2_ctx do
         if lib.nghttp2_asio_run(nghttp2_ctx) > 0 then
             local err = _M.get_error(nghttp2_ctx)
-            if err ~= 'unknown error' then
+            if err then
                 ngx.log(ngx.ERR, "nghttp2 run err:", err)
             end
         end
@@ -67,10 +67,7 @@ function _M.get_error(ctx)
     local ret = lib.nghttp2_asio_error(ctx, buf, errlen)
     if ret == 0 then
         local err = ffi.string(buf)
-        if #err > 0 then
-            return err
-        end
-        return nil
+        return #err > 0 and err or nil
     end
     if ret == 1 then
         return nil
