@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.21)
 project(resty_nghttp2 VERSION 1.0.0)
 
 option(ENABLE_HTTPS "enable https support" OFF)
-option(TESTS "test" ON)
+option(TESTS "test" OFF)
 option(SANITIZE_ADDRESS "enable sanitize address" OFF)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
