@@ -66,7 +66,11 @@ function _M.get_error(ctx)
     local buf = base.get_string_buf(errlen, false)
     local ret = lib.nghttp2_asio_error(ctx, buf, errlen)
     if ret == 0 then
-        return ffi.string(buf)
+        local err = ffi.string(buf)
+        if #err > 0 then
+            return err
+        end
+        return nil
     end
     if ret == 1 then
         return nil

@@ -145,7 +145,8 @@ BOOST_SYMBOL_EXPORT int nghttp2_asio_error(nghttp2_asio_ctx *ctx, char *u_err, s
         if (ctx->ec) {
             auto ec = ctx->ec;
             ctx->ec.clear();
-            return ec.message(u_err, errlen) != nullptr ? 0 : -1;
+            ec.message(u_err, errlen);
+            return 0;
         }
         return 1;
     } catch (std::exception &e) {

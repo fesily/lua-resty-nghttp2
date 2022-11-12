@@ -35,6 +35,8 @@
 /lua_modules
 /.luarocks
 /cmake-build-debug
+/cmake-build-release
 /cmake-build-relwithdebinfo
+/build
 /.idea
 /build.luarocks
