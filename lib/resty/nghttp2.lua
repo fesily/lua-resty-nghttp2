@@ -116,7 +116,9 @@ end
 
 local function retry(self, opts)
     local client, err = self:restart()
-    if not client then return nil, err end
+    if not client then
+        return nil, err
+    end
     return client:request(opts)
 end
 
