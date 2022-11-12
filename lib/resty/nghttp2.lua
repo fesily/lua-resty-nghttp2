@@ -48,6 +48,10 @@ function _M.new(uri, connection_timeout, read_timeout)
         if lib.nghttp2_asio_client_is_ready(client.handler) then
             return client
         end
+        local err = get_client_error(client.handler)
+        if err then
+            ngx.log(ngx.ERR, "invalid client:", err)
+        end
     end
 
     connection_timeout = connection_timeout or 10;
@@ -90,6 +94,10 @@ end
 ---@param data? string
 function _M:new_submit(method, uri, data)
     if not lib.nghttp2_asio_client_is_ready(self.handler) then
+        local err = get_client_error(self.handler)
+        if err then
+            ngx.log(ngx.ERR, "invalid client:", err)
+        end
         -- session is stopped,so we need create a new session
         return nil, 'retry'
     end
