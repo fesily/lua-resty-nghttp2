@@ -106,7 +106,7 @@ function _M:new_submit(method, uri, data)
         return nil, 'can\' create submit'
     end
     ffi.gc(handler, lib.nghttp2_asio_submit_delete)
-    return submit.new(handler, get_client_error, self.handler)
+    return submit.new(handler, get_client_error, self)
 end
 
 function _M:restart()
@@ -125,8 +125,15 @@ function _M:request(opts)
         return nil, 'invalid options'
     end
     local method = opts.method or "GET"
-    local uri = opts.uri or "/"
+    local uri = opts.uri
     local headers = opts.headers
+    if not uri then
+        local host = headers.Host
+        if not host then
+            return nil, 'need uri,please set headers.Host or uri'
+        end
+        uri = "http://" .. host .. "/"
+    end
     local data = opts.data
     local read_headers = opts.read_headers or false
     local timeout = opts.timeout or 1

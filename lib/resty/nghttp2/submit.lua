@@ -29,7 +29,7 @@ function _M:send_headers(headers)
             end
             local key = tostring(v[0])
             local value = tostring(v[1])
-            if key ~= 'host' then
+            if key ~= 'host' and key ~= 'Host' then
                 local sensitive = tostring(v[3])
 
                 lib.nghttp2_asio_request_push_headers(self.handler, key, value, sensitive)
@@ -37,7 +37,7 @@ function _M:send_headers(headers)
         end
     else
         for k, v in pairs(headers) do
-            if k ~= 'host' then
+            if k ~= 'host' and key ~= 'Host' then
                 lib.nghttp2_asio_request_push_headers(self.handler, tostring(k), tostring(v), false)
             end
         end
@@ -213,7 +213,7 @@ function _M.new(handler, get_client_error, client)
     return setmetatable({
         handler = handler,
         get_client_error = get_client_error,
-        client = client,
+        client = client.handler,
         read_response_headers = false,
         submited = false,
     }, _mt)
