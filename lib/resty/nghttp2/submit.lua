@@ -37,7 +37,7 @@ function _M:send_headers(headers)
         end
     else
         for k, v in pairs(headers) do
-            if k ~= 'host' and key ~= 'Host' then
+            if k ~= 'host' and k ~= 'Host' then
                 lib.nghttp2_asio_request_push_headers(self.handler, tostring(k), tostring(v), false)
             end
         end

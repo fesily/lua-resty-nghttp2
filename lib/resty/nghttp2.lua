@@ -98,6 +98,7 @@ function _M:new_submit(method, uri, data)
         if err then
             ngx.log(ngx.ERR, "invalid client:", err)
         end
+        ctx.clients[uri] = nil
         -- session is stopped,so we need create a new session
         return nil, 'retry'
     end

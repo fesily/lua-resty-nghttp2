@@ -1,5 +1,5 @@
 package = "lua-resty-nghttp2"
-version = "1.0.0-0"
+version = "1.2.0-0"
 source = {
     url = "git+https://github.com/fesily/lua-resty-nghttp2.git"
 }
@@ -8,7 +8,7 @@ description = {
     license = "MIT"
 }
 dependencies = {
-    "luajit-ffi-loader = 1.0.0-0"
+    "luajit-ffi-loader = 1.1.0-0"
 }
 build = {
     type = "cmake",
