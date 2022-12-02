@@ -5,6 +5,7 @@
 #include <resty_nghttp2.h>
 #include <future>
 #include <iostream>
+#include <chrono>
 
 struct ngx_lua_sema_t {
     virtual void poll() = 0;
@@ -157,5 +158,28 @@ TEST_CASE("memory") {
     while (!stop)
         nghttp2_asio_run(ctx);
     nghttp2_asio_submit_delete(submit);
+    nghttp2_asio_release_ctx(ctx);
+}
+
+TEST_CASE("deadline check") {
+    auto stop = false;
+    auto ctx = nghttp2_asio_init_ctx(cb);
+    REQUIRE(ctx != nullptr);
+    ngx_lua_sema_cb conn_event;
+    auto client = nghttp2_asio_client_new(ctx, "http://localhost:8002", 2, 2,
+                                          &conn_event);
+    REQUIRE(client != nullptr);
+    conn_event.cb = [&] {
+        stop = true;
+    };
+    while (!stop)
+        nghttp2_asio_run(ctx);
+    auto now = std::chrono::system_clock::now();
+    using namespace std::chrono_literals;
+    while (nghttp2_asio_client_is_ready(client) && std::chrono::system_clock::now() <= now + 1s)
+        nghttp2_asio_run(ctx);
+    char msg[2048];
+    REQUIRE(nghttp2_asio_client_error(client, msg, 2048) == 1);
+    nghttp2_asio_client_delete(client);
     nghttp2_asio_release_ctx(ctx);
 }

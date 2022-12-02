@@ -207,8 +207,10 @@ nghttp2_asio_client_new(nghttp2_asio_ctx *ctx, const char *c_uri, double read_ti
             client->ctx = ctx->shared_from_this();
         }
         auto &sess = client->ses;
+        sess.ping_tick(boost::posix_time::seconds(1));
+        read_timeout = std::max(0.001, read_timeout);
         sess.read_timeout(boost::posix_time::milliseconds(size_t(read_timeout * 1000)));
-        sess.on_connect([client](auto &&d) {
+        sess.on_connect([client](const boost::asio::ip::tcp::resolver::iterator& d) {
             client->post_connection_event();
         });
 
