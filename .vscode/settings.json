@@ -7,8 +7,10 @@
         "${3rd}/OpenResty/library",
         "${3rd}/busted/library",
         "${3rd}/luassert/library",
+        "/Users/apple/.luarocks/share/lua/5.1",
     ],
     "Lua.workspace.checkThirdParty": false,
+    "Lua.format.enable": true,
     "files.associations": {
         "*.log": "log",
         "*.sxx": "systemtap",

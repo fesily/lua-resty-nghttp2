@@ -1,370 +1,599 @@
-local getenv = os.getenv
-local tonumber = tonumber
-local handlers = require "dev.handlers"
-local log = require("apisix.core.log")
-local semaphore = require "ngx.semaphore"
-local pack = require "dev.pack"
-local protocol = require "dev.protocol"
-
+local lib = require('resty.nghttp2.libnghttp2')
+local ffi = require('ffi')
+local bit = require 'bit'
 local timer = require "resty.timer"
+local tab_nkeys = require 'table.nkeys'
+local create_options = require('resty.nghttp2.options')
+local create_stream = require('resty.nghttp2.stream')
+local semaphore = require 'ngx.semaphore'
+local http2 = require 'resty.nghttp2.http2'
+local url_parser = require 'resty.nghttp2.url_parser'
 
-local table_clear = require("table.clear")
-local table_insert = table.insert
-local table_isempty = require("table.isempty")
-local table_isarray = require("table.isarray")
-local table_unpack = table.unpack
-local table_pack = table.pack
-local table_remove = table.remove
-local ngx_now = ngx.now
-local xpcall, tostring, select = xpcall, tostring, select
-local exiting = ngx.worker.exiting
+local ffi_cast = ffi.cast
+local ffi_string = ffi.string
+local uint16_t = ffi.typeof("uint16_t")
+local ptr_t = ffi.typeof("void*")
+local unescape_uri = ngx.unescape_uri
+local band = bit.band
 
-local default_option = {
-    timeout = 5
+---@class nghttp2.session
+local _M = {}
+local _mt = {
+    __index = _M
 }
-
----@alias rpc_status
----| "'connected'"
----| "'disconnect'"
-
----@class RpcClient
----@field stop boolean
----@field sock tcpsock
----@field lastTime number
----@field request_id integer
----@field option {timeout:number}
----@field sendSemaphore ngx.semaphore
----@field send_deque {head:RpcNetHead,body:any}[]
----@field requests table<string,ngx.semaphore>
----@field handle_request_deque any[]
----@field is_init boolean|nil
----@field changed_status fun(status:rpc_status)
----@field semaphore_pool ngx.semaphore[]
-local _M = {
-    _VERSION = "0.1.0"
-}
----@module "dev.handlers"
-_M.handlers = nil
----@param self RpcClient
-local function init(self)
-    self.stop = false
-    self.send_deque = {}
-    self.requests = {}
-    self.option = self.option or default_option
-    self.lastTime = ngx_now()
-    self.request_id = 0
-    self.sendSemaphore = self.sendSemaphore or semaphore.new()
-    self.sock = nil
-    self.handlers = self.handlers or handlers.new()
-    self.handle_request_deque = {}
-    self.semaphore_pool = {}
+---@type table<number, nghttp2.session>
+local session_registry = {}
+local function user_data_key(user_data)
+    return tonumber(ffi_cast(uint16_t, user_data))
 end
 
----@generic T
----@param obj? T
----@return T|RpcClient
-function _M.new(obj)
-    obj = obj or {}
-    init(obj)
-    return setmetatable(obj, {
-        __index = _M
+local global_callbacks = {
+    --[[
+        typedef int (*nghttp2_on_begin_headers_callback)(nghttp2_session *session,
+                                                 const nghttp2_frame *frame,
+                                                 void *user_data)
+    ]]
+    on_begin_headers = ffi.cast("nghttp2_on_begin_headers_callback",
+        function(session, frame, user_data)
+            session = session_registry[user_data_key(user_data)]
+            if not session then
+                return lib.NGHTTP2_ERR_CALLBACK_FAILURE
+            end
+            return session:on_begin_headers(frame)
+        end);
+    --[[
+            typedef int (*nghttp2_on_header_callback)(nghttp2_session *session,
+                                          const nghttp2_frame *frame,
+                                          const uint8_t *name, size_t namelen,
+                                          const uint8_t *value, size_t valuelen,
+                                          uint8_t flags, void *user_data);
+        ]]
+    on_header = ffi.cast("nghttp2_on_header_callback",
+        function(session, frame, name, namelen, value, valuelen, flags, user_data)
+            session = session_registry[user_data_key(user_data)]
+            if not session then
+                return lib.NGHTTP2_ERR_CALLBACK_FAILURE
+            end
+            return session:on_header(frame, name, namelen, value, valuelen, flags)
+        end);
+
+    on_frame_recv = ffi.cast("nghttp2_on_frame_recv_callback",
+        function(session, frame, user_data)
+            session = session_registry[user_data_key(user_data)]
+            if not session then
+                return lib.NGHTTP2_ERR_CALLBACK_FAILURE
+            end
+            return session:on_frame_recv(frame)
+        end);
+    on_data_chunk_recv = ffi.cast("nghttp2_on_data_chunk_recv_callback",
+        function(session, flags, stream_id, data, len, user_data)
+            session = session_registry[user_data_key(user_data)]
+            if not session then
+                return lib.NGHTTP2_ERR_CALLBACK_FAILURE
+            end
+            return session:on_data_chunk_recv(flags, stream_id, data, len)
+        end);
+    --[[
+        int on_stream_close_callback(nghttp2_session *session, int32_t stream_id,
+                             uint32_t error_code, void *user_data)
+    ]]
+    on_stream_close = ffi.cast("nghttp2_on_stream_close_callback",
+        function(session, stream_id, error_code, user_data)
+            session = session_registry[user_data_key(user_data)]
+            if not session then
+                return lib.NGHTTP2_ERR_CALLBACK_FAILURE
+            end
+            return session:on_stream_close(stream_id, error_code)
+        end)
+}
+
+local function session_callbacks_del(callbacks)
+    lib.nghttp2_session_callbacks_del(callbacks[0])
+end
+
+-- Make a C callbacks structure using the functions in a table.
+-- Will fail if a callback is defined but is not a function.
+-- Ignores keys that are not callbacks.
+local nghttp2_session_callbacks_t = ffi.typeof "nghttp2_session_callbacks*[1]"
+local function create_callbacks()
+    local cb = nghttp2_session_callbacks_t()
+    local error_code = lib.nghttp2_session_callbacks_new(cb)
+    if error_code ~= 0 then
+        return nil, lib.nghttp2_strerror(error_code)
+    end
+    ffi.gc(cb, session_callbacks_del)
+    for name, func in pairs(global_callbacks) do
+        local set_callback = "nghttp2_session_callbacks_set_" .. name .. "_callback"
+        lib[set_callback](cb[0], func)
+    end
+    return cb
+end
+
+local nghttp2_session_t = ffi.typeof "nghttp2_session*[1]"
+local user_data_count = 0
+
+local window_size = 256 * 1024 * 1024
+local default_submit_settings
+do
+    default_submit_settings = ffi.new("nghttp2_settings_entry[2]", {
+        { lib.NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS, 100 },
+        { lib.NGHTTP2_SETTINGS_INITIAL_WINDOW_SIZE, window_size }
     })
 end
 
-local function pack_result(ok, ...)
-    if not ok then
+function _M:handle_ping()
+    if (self.stopped or tab_nkeys(self.streams) ~= 0) then return end
+
+    lib.nghttp2_submit_ping(self.handler[0], lib.NGHTTP2_FLAG_NONE, nil)
+
+    self:signal_write();
+end
+
+function _M.new(opt)
+    local options, err
+    if opt then
+        options, err = create_options(opt)
+        if not options then
+            return nil, err
+        end
+    end
+
+    local cb, err = create_callbacks()
+    if not cb then
+        return nil, err
+    end
+    local session = nghttp2_session_t()
+    local rv
+    if options then
+        rv = lib.nghttp2_session_client_new2(session, cb[0], ffi_cast(ptr_t, user_data_count), options[0])
+    else
+        rv = lib.nghttp2_session_client_new(session, cb[0], ffi_cast(ptr_t, user_data_count))
+    end
+    if rv ~= 0 then
+        return nil, lib.nghttp2_strerror(rv)
+    end
+    user_data_count = user_data_count + 1
+    if user_data_count > 65535 then
+        user_data_count = 0
+    end
+    lib.nghttp2_session_set_local_window_size(session[0], lib.NGHTTP2_FLAG_NONE, 0, window_size)
+    lib.nghttp2_submit_settings(session[0], lib.NGHTTP2_FLAG_NONE, default_submit_settings,
+        ffi.sizeof(default_submit_settings))
+    ---@class nghttp2.session
+    return setmetatable({ handler = session,
+        ---@type nghttp2.stream[]
+        streams = {},
+        stopped = false,
+        tcpsock = ngx.socket.tcp(),
+        write_sem = semaphore.new(),
+        on_error = opt.on_error,
+    }, _mt)
+end
+
+function _M:create_stream(stream_id)
+    local strm = create_stream(stream_id, self);
+    self.streams[stream_id] = strm
+    self:stop_ping()
+    return strm
+end
+
+function _M:find_stream(stream_id)
+    return self.streams[stream_id]
+end
+
+function _M:pop_stream(stream_id)
+    local strm = self.streams[stream_id]
+    self.streams[stream_id] = nil
+    if tab_nkeys(self.streams) == 0 then
+        self:start_ping()
+    end
+    return strm
+end
+
+function _M:start_ping()
+    if not self.ping_timer then
+        self.ping_timer = timer.new({
+            interval = 15,
+            recurring = true,
+            immediate = false,
+            detached = false,
+            expire = _M.handle_ping,
+        }, self)
+    end
+end
+
+function _M:stop_ping()
+    if self.ping_timer then
+        self.ping_timer:cancel()
+        self.ping_timer = nil
+    end
+end
+
+---@param dst nghttp2.uri_ref
+---@param value string
+local function split_path(dst, value, first, last)
+    local path_last = value:find("?", 1, true)
+    local query_first;
+    if (not path_last) then
+        query_first = last
+        path_last = last
+    else
+        path_last = first + (path_last - 1)
+        query_first = path_last + 1
+    end
+
+    local raw_path = ffi_string(first, path_last - first);
+    dst.path = unescape_uri(raw_path);
+    dst.raw_path = raw_path;
+    dst.raw_query = ffi.string(query_first, last - query_first);
+end
+
+function _M:on_begin_headers(frame)
+    if frame.hd.type ~= lib.NGHTTP2_PUSH_PROMISE then
+        return 0
+    end
+    self:create_stream(frame.push_promise.promised_stream_id)
+    return 0
+end
+
+function _M:on_header(frame, name, namelen, value, valuelen, flags)
+    local t = frame.hd.type
+    if t == lib.NGHTTP2_HEADERS then
+        local strm = self:find_stream(frame.hd.stream_id)
+        if not strm then
+            return 0
+        end
+        if frame.headers.cat == lib.NGHTTP2_HCAT_HEADERS and not strm:expect_final_response() then
+            return 0
+        end
+        local token = http2.lookup_token(name, namelen);
+
+        local res = strm.response
+        if token == http2.HD__STATUS then
+            res:status_code(tonumber(ffi_string(value, valuelen)));
+        else
+            if res.header_buffer_size + namelen + valuelen > 64 * 1024 then
+                lib.nghttp2_submit_rst_stream(self, lib.NGHTTP2_FLAG_NONE,
+                    frame.hd.stream_id, lib.NGHTTP2_INTERNAL_ERROR);
+                return 0
+            end
+            res:update_header_buffer_size(namelen + valuelen);
+
+            if token == http2.HD_CONTENT_LENGTH then
+                res.content_length = tonumber(ffi_string(value, valuelen))
+            end
+
+            res.headers[ffi_string(name, namelen)] = { value = ffi_string(value, valuelen),
+                sensitive = band(flags, lib.NGHTTP2_NV_FLAG_NO_INDEX) ~= 0 }
+        end
+    else if t == lib.NGHTTP2_PUSH_PROMISE then
+            local strm = self:find_stream(frame.push_promise.promised_stream_id);
+            if not strm then
+                return 0
+            end
+
+            local req = strm.request
+            local uri = req.uri;
+
+            local name_s = ffi_string(name, namelen)
+            local value_s = ffi_string(value, valuelen)
+            local case = http2.lookup_token(name, namelen)
+
+            if case == http2.HD__METHOD then
+                req.method = value_s;
+            elseif case == http2.HD__SCHEME then
+                uri.scheme = value_s;
+            elseif case == http2.HD__PATH then
+                split_path(uri, value_s, value, value + valuelen);
+            elseif case == http2.HD__AUTHORITY then
+                uri.host = value_s
+            elseif case == http2.HD_HOST then
+                if not uri.host then
+                    uri.host = value_s
+                end
+            else
+                if (req.header_buffer_size + namelen + valuelen > 64 * 1024) then
+                    lib.nghttp2_submit_rst_stream(self, lib.NGHTTP2_FLAG_NONE,
+                        frame.hd.stream_id, lib.NGHTTP2_INTERNAL_ERROR)
+                else
+                    req:update_header_buffer_size(namelen + valuelen)
+
+                    req.headers[name_s] = {
+                        value = value_s,
+                        sensitive = band(flags, lib.NGHTTP2_NV_FLAG_NO_INDEX) ~= 0
+                    }
+                end
+
+            end
+            return 0
+        end
+    end
+end
+
+function _M:on_frame_recv(frame)
+    local strm = self:find_stream(frame.push_promise.promised_stream_id);
+    if not strm then
+        return 0
+    end
+    local t = frame.hd.type
+    if t == lib.NGHTTP2_DATA then
+        if band(frame.hd.flags, lib.NGHTTP2_FLAG_END_STREAM) ~= 0 then
+            strm.response:call_on_data();
+        end
+    elseif t == lib.NGHTTP2_HEADERS then
+        if frame.headers.cat == lib.NGHTTP2_HCAT_HEADERS and
+            not strm:expect_final_response() then
+            return 0;
+        end
+
+        if strm:expect_final_response() then
+            -- wait for final response
+            return 0
+        end
+
+        local req = strm.request
+        req:call_on_response(strm.response);
+        if band(frame.hd.flags, lib.NGHTTP2_FLAG_END_STREAM) ~= 0 then
+            strm.response:call_on_data();
+        end
+    elseif t == lib.NGHTTP2_PUSH_PROMISE then
+        local push_strm = self:find_stream(frame.push_promise.promised_stream_id);
+        if not push_strm then
+            return 0
+        end
+
+        strm.request:call_on_push(push_strm.request);
+    end
+    return 0
+end
+
+function _M:on_data_chunk_recv(flags, stream_id, data, len)
+    local strm = self:find_stream(stream_id);
+    if not strm then
+        return 0
+    end
+
+    local res = strm.response
+    res:call_on_data(data, len);
+
+    return 0
+end
+
+function _M:on_stream_close(stream_id, error_code)
+    local strm = self:pop_stream(stream_id);
+    if not strm then
+        return 0
+    end
+
+    strm.request:call_on_close(error_code)
+
+    return 0
+end
+
+function _M:resume(strm)
+    if (self.stopped) then
         return
     end
-    local nparam = select('#', ...)
-    if nparam == 0 then
-        return nil
-    elseif nparam == 1 then
-        return select(1, ...)
-    end
-    return table_pack(...)
+    lib.nghttp2_session_resume_data(self.handler[0], strm.stream_id);
+    self:signal_write();
 end
 
-function _M:run_once_recv_msg()
-    local head, body = pack.read(self.reader)
-    if not head then
-        self.stop = true
-        return false
+---@param self nghttp2.session
+local function stop(self)
+    if (self.stopped) then
+        return
     end
-    if head.Type == protocol.HBRequestType then
+    self.stopped = true
+    self:stop_ping()
+    self.tcpsock:close()
+end
 
-        self.lastTime = ngx_now()
-        head.Type = protocol.HBResponseType
-        pack.write(self.sock, head)
+function _M:should_stop()
+    return not lib.nghttp2_session_want_read(self.handler[0]) and
+        not lib.nghttp2_session_want_write(self.handler[0])
+end
 
-    elseif head.Type == protocol.HBResponseType then
+local data_t = ffi.typeof "const uint8_t*[1]"
 
-        self.lastTime = ngx_now()
-        -- Nothing to do here
-
-    elseif head.Type == protocol.RequestType then
-
-        table_insert(self.handle_request_deque, { head, body })
-
-    elseif head.Type == protocol.ResponseType then
-
-        self.lastTime = ngx_now()
-        local key = tostring(head.Seq)
-        local sm = self.requests[key]
-        if sm then
-            self.requests[key] = body
-            sm:post()
-        else
-            log.info("can't find request:", head.ServiceMethod, head.Seq)
+---@param self nghttp2.session
+local function write_thread(self)
+    local data = data_t()
+    while not self.stopped do
+        local n = lib.nghttp2_session_mem_send(self.handler[0], data)
+        if n < 0 then
+            self:call_error_cb(lib.nghttp2_strerror(n))
+            stop(self)
+            return
         end
-    else
-        log.error("can't find rpc head type:", head.Type)
-    end
-    return true
-end
-
-function _M:handle_requests()
-    local v = table_remove(self.handle_request_deque, 1)
-    if v then
-        repeat
-            local head = v[1]
-            local body = v[2]
-            local result = pack_result(xpcall(self.handlers.call, function(msg)
-                head.Error = msg
-            end, self.handlers, head.ServiceMethod, body))
-            -- unused field
-            head.ServiceMethod = nil
-            head.Type = protocol.ResponseType
-            if not pack.write(self.sock, head, result) then
-                break
+        if n == 0 then
+            if self:should_stop() then
+                stop(self)
+                return
             end
-            v = table_remove(self.handle_request_deque, 1)
-        until v == nil
+            self.write_sem:wait()
+        else
+            local ok, err = self.tcpsock:send(ffi_string(data[0], n))
+            if not ok then
+                self:call_error_cb(err)
+                stop(self)
+                return
+            end
+        end
     end
 end
 
----@param self RpcClient
-local function recver(self)
-    local count = 0
-    while self.is_init do
-        if not self:run_once_recv_msg() then
+function _M:signal_write()
+    if (self.stopped) then
+        return
+    end
+
+    self.write_sem:post()
+end
+
+function _M:do_read()
+    while not self.stopped do
+        local data, err = self.tcpsock:receiveany(10 * 1024)
+        if not data then
+            if not self:should_stop() then
+                self:call_error_cb(err)
+            end
+            stop(self)
             return
         end
-        count = count + 1
-        self:handle_requests()
-    end
-    return count
-end
-
-function _M:run_once_send_msg()
-    local v = table_remove(self.send_deque, 1)
-    if v == nil then
-        self.sendSemaphore:wait(1)
-        return not self.stop
-    end
-    return pack.write(self.sock, v.head, v.body)
-end
-
----@param self RpcClient
-local function sender(self)
-    local count = 0
-    while self.is_init do
-        if not self:run_once_send_msg() then
+        local rv = lib.nghttp2_session_mem_recv(self.handler[0], data, #data)
+        if rv ~= #data then
+            self:call_error_cb(rv < 0 and lib.nghttp2_strerror(rv) or "General protocol error")
+            stop(self)
             return
         end
-        count = count + 1
-        if exiting() then
-            self.is_init = true
-            return count
+        self:signal_write()
+        if self:should_stop() then
+            stop(self)
+            return
         end
     end
-    return count
 end
 
----@param self RpcClient
-local function post_message(self, head, body)
-    if not self.is_init then
-        log.debug("sock is not init when sending message", head.ServiceMethod)
-        return true
-    end
-
-    local needPost = table_isempty(self.send_deque)
-    table_insert(self.send_deque, {
-        head = head,
-        body = body
-    })
-
-    if needPost then
-        self.sendSemaphore:post()
-    end
-    return true
-end
-
----@return RpcNetHead
-function _M:create_head(methodName)
-    self.request_id = self.request_id + 1
-    ---@type RpcNetHead
-    return {
-        ServiceMethod = methodName,
-        Seq = self.request_id,
-        Type = protocol.RequestType
-    }
-end
-
----@param methodName string
----@param obj any
----@return boolean
-function _M:post_message(methodName, obj)
-    return post_message(self, self:create_head(methodName), obj)
-end
-
-function _M:run_one()
-    self:run_once_send_msg()
-    self:run_once_recv_msg()
-end
-
-local function create_recver(self)
-    xpcall(recver, function()
-        self.is_init = false
-    end, self)
-end
-
-function _M:run()
-    local recver = ngx.thread.spawn(create_recver, self)
-    pcall(sender, self)
-    ngx.thread.wait(recver)
-    self:handle_requests()
-end
-
----@param self RpcClient
-local function heart(self)
-    post_message(self, {
-        Type = protocol.HBRequestType
-    }, nil)
-end
-
-function _M:start_once(host, port)
-    self.sock = ngx.socket.tcp()
-    local ok, err = self.sock:connect(host, port)
+function _M:connection(host, port, opts)
+    local ok, err = self.tcpsock:connect(host, port, opts)
     if not ok then
         return nil, err
     end
+    self.writing = ngx.thread.spawn(write_thread, self)
+    self.reader = ngx.thread.spawn(_M.do_read, self)
+    self:start_ping()
+end
+
+function _M:call_error_cb(error)
+    if self.on_error then
+        self:on_error(error)
+    end
+end
+
+local UF_SCHEMA = bit.lshift(1, url_parser.UF_SCHEMA)
+local UF_HOST = bit.lshift(1, url_parser.UF_HOST)
+local HF_PORT = bit.lshift(1, url_parser.UF_PORT)
+local UF_QUERY = bit.lshift(1, url_parser.UF_QUERY)
+
+local nghttp2_nv_t = ffi.typeof("nghttp2_nv[?]")
+local nghttp2_data_provider = ffi.new("nghttp2_data_provider")
+nghttp2_data_provider.read_callback = function(session, stream_id, buf, length, data_flags, source, user_data)
+    local session = session_registry[user_data_key(user_data)]
+    if not session then
+        return lib.NGHTTP2_ERR_CALLBACK_FAILURE
+    end
+    local strm = session:find_stream(stream_id)
+    if not strm then
+        return lib.NGHTTP2_ERR_CALLBACK_FAILURE
+    end
+    return strm.request:call_on_read(buf, length, data_flags)
+end
+
+function _M:submit(method, uri, cb, headers, prio)
     if self.stopped then
-        return true
+        return nil, "stopped"
+    end
+    local u1, err = url_parser.http_parser_parse_url(uri);
+    if not u1 then
+        return nil, err
+    end
+    local u = u1[0]
+    if band(u.field_set, UF_SCHEMA) == 0 and band(u.field_set, UF_HOST) == 0 then
+        return nil, "invalid uri"
+    end
+    local strm = create_stream(0, self)
+    local req = strm.request
+    local uref = req.uri
+    uref.scheme = http2.copy_url_component(u, url_parser.UF_SCHEMA, uri);
+    uref.host = http2.copy_url_component(u, url_parser.UF_HOST, uri);
+    uref.raw_path = http2.copy_url_component(u, url_parser.UF_PATH, uri);
+    uref.raw_query = http2.copy_url_component(u, url_parser.UF_QUERY, uri);
+
+    if url_parser.ipv6_numeric_addr(uref.host) then
+        uref.host = "[" .. uref.host .. "]"
     end
 
-    self.reader = pack.create_reader(self.sock)
-    local heart_timer, err = timer.new({
-        interval = 3, -- expiry interval in seconds
-        recurring = true, -- recurring or single timer
-        immediate = false, -- immediateinitial interval will be 0
-        detached = false, -- run detached, or be garbagecollectible
-        expire = function()
-            heart(self)
-        end -- callback on timer expiry
-    })
-    if not heart_timer then log.alert(err) return end
-    -- send first packaget
-    local node_id = tonumber(getenv("XWAF_AGENT_NODE_ID"))
-    if not node_id then
-        log.warn("NO XWAF_AGENT_NODE_ID used default 1")
-        node_id = 1
+    if band(u.field_set, HF_PORT) ~= 0 then
+        uref.host = uref.host .. ":" .. u.port
     end
-    if not pack.write_hello(self.sock, node_id) then
+
+    if not uref.raw_path or #uref.raw_path == 0 then
+        uref.raw_path = "/"
+    end
+
+    uref.path = unescape_uri(uref.raw_path)
+
+    local path = uref.raw_path
+
+    if band(u.field_set, UF_QUERY) ~= 0 then
+        path = path .. "?" .. uref.raw_query
+    end
+
+    local nvs = nghttp2_nv_t(4 + tab_nkeys(headers))
+    http2.make_nv_ls(nvs[0], ":method", method)
+    http2.make_nv_ls(nvs[1], ":scheme", uref.scheme)
+    http2.make_nv_ls(nvs[2], ":path", path)
+    http2.make_nv_ls(nvs[3], ":authority", uref.host)
+    local i = 4
+    for k, v in pairs(headers) do
+        http2.make_nv_ls(nvs[i], k, v.value, v.sensitive)
+        i = i + 1
+    end
+    req.headers = headers
+
+    local prd
+    if cb then
+        req.generator_cb = cb
+        prd = nghttp2_data_provider
+    end
+
+    local stream_id = lib.nghttp2_submit_request(self.handler[0], prio, nvs, prd, nil)
+    if stream_id < 0 then
+        return nil, lib.nghttp2_strerror(stream_id)
+    end
+    strm.stream_id = stream_id
+    self.streams[stream_id] = strm
+    self:signal_write()
+    self:stop_ping()
+    return strm
+end
+
+function _M:cancel(strm, error_code)
+    if (self.stopped) then
+        return;
+    end
+
+    lib.nghttp2_submit_rst_stream(self.handler[0], lib.NGHTTP2_FLAG_NONE, strm.stream_id,
+        error_code);
+    self:signal_write();
+end
+
+function _M:write_trailer(strm, headers)
+    assert(type(headers) == "table")
+    local nghttp2_nvs = nghttp2_nv_t(tab_nkeys(headers))
+    local i = 0
+    for k, v in pairs(headers) do
+        http2.make_nv_ls(nghttp2_nvs[i], k, v.value, v.sensitive)
+        i = i + 1
+    end
+    local rv = lib.nghttp2_submit_trailer(self.handler[0], strm.stream_id, nghttp2_nvs, i)
+    if (rv ~= 0) then
+        ngx.log(ngx.ERR, lib.nghttp2_strerror(rv))
+        return -1;
+    end
+    self:signal_write();
+end
+
+function _M:shutdown()
+    if self.stopped then
         return
     end
-    self.is_init = true
-    self.changed_status('connected')
-
-    self:run()
-    heart_timer:cancel()
-
-    self.changed_status('disconnect')
-    self.is_init = false
-end
-
-function _M:clear()
-    init(self)
-end
-
----comment
----@param self RpcClient
----@param head RpcNetHead
----@param ... any
----@return ...
-local function call_service(self, head, ...)
-    local body
-    local nparam = select("#", ...)
-    if nparam > 0 then
-        if nparam == 1 then
-            body = select(1, ...)
-        else
-            body = table_pack(...)
-        end
+    if not self.handler then
+        return
     end
-
-    if not post_message(self, head, body) then
-        log.info("send message failed!")
-        return nil
-    end
-    local sm = table_remove(self.semaphore_pool)
-    if not sm then
-        sm = semaphore.new()
-    end
-
-    local seq_key = tostring(head.Seq)
-    self.requests[seq_key] = sm
-    local ok, err = sm:wait(self.option.timeout)
-
-    table_insert(self.semaphore_pool, sm)
-    local data = self.requests[seq_key]
-    self.requests[seq_key] = nil
-    if err ~= nil then
-        log.warn(head.ServiceMethod, "wait rpc response err:", err)
-        return nil
-    end
-    assert(ok)
-    if type(data) == "table" and table_isarray(data) then -- type is array ?
-        return table_unpack(data)
-    else
-        return data
-    end
-end
-
----create service proxy from obj
----@generic T
----@param name string
----@param obj T
----@return T
-function _M:register_service(name, obj)
-    local rpc_client = self
-    table_clear(obj)
-    obj.name = name
-    return setmetatable(obj, {
-        __index = function(obj, cmd)
-            obj[cmd] = function(...)
-                local head = rpc_client:create_head(obj.name .. "." .. cmd)
-                return call_service(rpc_client, head, ...)
-            end
-            return obj[cmd]
-        end
-    })
-end
-
----unregister_service infact is unsupported
----@param _ any
-function _M:unregister_service(_)
-end
-
-function _M:register_single_handler(name, obj, key, func)
-    self.handlers:register(name, obj, key, func)
-end
-
-function _M:register_handler(name, obj)
-    self.handlers:register_handler(name, obj)
-end
-
-function _M:unregister_handler(name)
-    self.handlers:unregister_handler(name)
+    lib.nghttp2_session_terminate_session(self.handler[0], lib.NGHTTP2_NO_ERROR)
+    self:signal_write()
+    ngx.thread.wait(self.reader, self.writing)
 end
 
 return _M
