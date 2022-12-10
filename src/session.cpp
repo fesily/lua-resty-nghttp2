@@ -325,9 +325,32 @@ ssize_t resty_nghttp2_data_provider_read_callback(
         nghttp2_session *session, int32_t stream_id, uint8_t *buf, size_t length,
         uint32_t *data_flags, nghttp2_data_source *source, void *user_data) noexcept {
     if (LIKELY(source->ptr)) {
-        auto cb = (resty_nghttp2_data_provider_read_callback1) source->ptr;
-        return cb(stream_id, buf, length, data_flags, user_data);
+        assert(luajit_nghttp2_current_state);
+        if (UNLIKELY(!luajit_nghttp2_current_state)) {
+            goto handle_err;
+        }
+        auto L = luajit_nghttp2_current_state;
+        luajit::check_lua_stack checkLuaStack{L};
+
+        lua_pushlightuserdata(L, &luajit_nghttp2_mask);
+        lua_gettable(L, LUA_REGISTRYINDEX);
+        lua_getfield(L, -1, "data_provider_read");
+        assert(lua_type(L, -1) == LUA_TFUNCTION);
+
+        lua_pushinteger(L, stream_id);
+        lua_pushlightuserdata(L, buf);
+        lua_pushlightuserdata(L, &length);
+        lua_pushlightuserdata(L, data_flags);
+        lua_pushlightuserdata(L, user_data);
+        auto rv = lua_pcall(L, 5, 1, 0);
+        if (rv != 0) {
+            return nghttp2_error::NGHTTP2_ERR_CALLBACK_FAILURE;
+        }
+        auto ret = (int) lua_tointeger(L, -1);
+        lua_pop(L, 2);
+        return ret;
     }
+    handle_err:
     *data_flags |= NGHTTP2_DATA_FLAG_EOF;
     return 0;
 }

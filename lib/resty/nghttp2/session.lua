@@ -115,7 +115,9 @@ do
 end
 
 function _M:handle_ping()
-    if (self.stopped or tab_nkeys(self.streams) ~= 0) then return end
+    if (self.stopped or tab_nkeys(self.streams) ~= 0) then
+        return
+    end
 
     lib.nghttp2_submit_ping(self.session, lib.NGHTTP2_FLAG_NONE, nil)
 
@@ -175,7 +177,7 @@ function _M.new(opt)
     end
     lib.nghttp2_session_set_local_window_size(session, lib.NGHTTP2_FLAG_NONE, 0, window_size)
     lib.nghttp2_submit_settings(session, lib.NGHTTP2_FLAG_NONE, default_submit_settings,
-        default_submit_settings_size)
+            default_submit_settings_size)
 
     return sess
 end
@@ -220,15 +222,13 @@ local function handle_all_ping(p)
     if p then
         for k, v in pairs(ping_timer_master) do
             logger.debug("close all streams when exiting")
-            ---@cast k nghttp2.session
-            k:shutdown()
+            ---@cast k nghttp2.session k:shutdown()
         end
         ping_timer_master = nil
     else
         for k, v in pairs(ping_timer_master) do
             if v then
-                ---@cast k nghttp2.session
-                k:handle_ping()
+                ---@cast k nghttp2.session k:handle_ping()
             end
         end
     end
@@ -304,7 +304,7 @@ function _M:on_header(frame, name, value, flags)
         else
             if res.header_buffer_size + namelen + valuelen > 64 * 1024 then
                 lib.nghttp2_submit_rst_stream(self.session, lib.NGHTTP2_FLAG_NONE,
-                    frame.hd.stream_id, lib.NGHTTP2_INTERNAL_ERROR);
+                        frame.hd.stream_id, lib.NGHTTP2_INTERNAL_ERROR);
                 return 0
             end
             res:update_header_buffer_size(namelen + valuelen);
@@ -314,9 +314,10 @@ function _M:on_header(frame, name, value, flags)
             end
 
             res.headers[ffi_string(name, namelen)] = { value = value,
-                sensitive = band(flags, lib.NGHTTP2_NV_FLAG_NO_INDEX) ~= 0 }
+                                                       sensitive = band(flags, lib.NGHTTP2_NV_FLAG_NO_INDEX) ~= 0 }
         end
-    else if t == lib.NGHTTP2_PUSH_PROMISE then
+    else
+        if t == lib.NGHTTP2_PUSH_PROMISE then
             local strm = self:find_stream(frame.push_promise.promised_stream_id);
             if not strm then
                 return 0
@@ -346,7 +347,7 @@ function _M:on_header(frame, name, value, flags)
             else
                 if (req.header_buffer_size + namelen + valuelen > 64 * 1024) then
                     lib.nghttp2_submit_rst_stream(self.session, lib.NGHTTP2_FLAG_NONE,
-                        frame.hd.stream_id, lib.NGHTTP2_INTERNAL_ERROR)
+                            frame.hd.stream_id, lib.NGHTTP2_INTERNAL_ERROR)
                 else
                     req:update_header_buffer_size(namelen + valuelen)
 
@@ -376,7 +377,7 @@ function _M:on_frame_recv(frame)
         end
     elseif t == lib.NGHTTP2_HEADERS then
         if frame.headers.cat == lib.NGHTTP2_HCAT_HEADERS and
-            not strm:expect_final_response() then
+                not strm:expect_final_response() then
             return 0;
         end
 
@@ -439,7 +440,7 @@ end
 
 function _M:should_stop()
     return lib.nghttp2_session_want_read(self.session) == 0 and
-        lib.nghttp2_session_want_write(self.session) == 0
+            lib.nghttp2_session_want_write(self.session) == 0
 end
 
 ---@param self nghttp2.session
@@ -451,12 +452,14 @@ local function write_thread(self)
         if err then
             self:call_error_cb(err)
             stop(self)
-            goto EXIT
+            goto
+            EXIT
         end
         if not data then
             if self:should_stop() then
                 stop(self)
-                goto EXIT
+                goto
+                EXIT
             end
             self.wait_write = true
             self.write_sem:wait(1)
@@ -465,11 +468,12 @@ local function write_thread(self)
             if not bytes then
                 self:call_error_cb("tcpsock send:" .. err)
                 stop(self)
-                goto EXIT
+                goto
+                EXIT
             end
         end
     end
-    ::EXIT::
+    :: EXIT ::
     logger.debug("exit write_thread")
     self.sem_write_thead_exit:post()
 end
@@ -497,21 +501,24 @@ local function do_read(self)
                 self:call_error_cb("tcpsock receiveany:" .. err)
             end
             stop(self)
-            goto EXIT
+            goto
+            EXIT
         end
         local rv, err = libresty_nghttp2.mem_recv(self.session, data)
         if not rv then
             self:call_error_cb(err)
             stop(self)
-            goto EXIT
+            goto
+            EXIT
         end
         self:signal_write()
         if self:should_stop() then
             stop(self)
-            goto EXIT
+            goto
+            EXIT
         end
     end
-    ::EXIT::
+    :: EXIT ::
     logger.debug("exit do_read")
     self.sem_read_thead_exit:post()
 end
@@ -533,8 +540,12 @@ end
 local nghttp2_nv_t = ffi.typeof("nghttp2_nv[?]")
 local nghttp2_data_provider = ffi.new("nghttp2_data_provider")
 nghttp2_data_provider.read_callback = libresty_nghttp2.resty_nghttp2_data_provider_read_callback
-nghttp2_data_provider.source.ptr = ffi.cast("ssize_t (*)(int32_t stream_id, uint8_t *buf, size_t length,uint32_t *data_flags,void *user_data)"
-    , function(stream_id, buf, length, data_flags, user_data)
+local uint32_t_ptr_t = ffi.typeof "uint32_t*"
+local size_t_ptr_t = ffi.typeof "size_t*"
+function libresty_nghttp2.data_provider_read(stream_id, buf, length, data_flags, user_data)
+    length = ffi_cast(size_t_ptr_t, length)[0]
+    data_flags = ffi_cast(uint32_t_ptr_t, data_flags)
+    user_data = ffi_cast(void_ptr_t, user_data)
     local session = session_registry[user_data_key(user_data)]
     if not session then
         return lib.NGHTTP2_ERR_CALLBACK_FAILURE
@@ -544,7 +555,7 @@ nghttp2_data_provider.source.ptr = ffi.cast("ssize_t (*)(int32_t stream_id, uint
         return lib.NGHTTP2_ERR_CALLBACK_FAILURE
     end
     return strm.request:call_on_read(buf, length, data_flags)
-end)
+end
 ffi.cdef [[
 typedef struct nghttp2_data_string_source {
     const char *data;
@@ -612,7 +623,6 @@ function _M:submit(scheme, host, path, method, headers, data_or_cb, prio)
         end
     end
 
-
     local stream_id = lib.nghttp2_submit_request(self.session, prio, nvs, i, prd, nil)
     if stream_id < 0 then
         return nil, lib.nghttp2_strerror(stream_id)
@@ -627,11 +637,11 @@ end
 
 function _M:cancel(strm, error_code)
     if (self.stopped) then
-        return;
+        return ;
     end
 
     lib.nghttp2_submit_rst_stream(self.session, lib.NGHTTP2_FLAG_NONE, strm.stream_id,
-        error_code);
+            error_code);
     self:signal_write();
 end
 
