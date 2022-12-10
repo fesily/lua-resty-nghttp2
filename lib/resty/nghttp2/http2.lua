@@ -55,16 +55,12 @@ local _M = {
 
 ---@param nv nghttp2.nv
 function _M.make_nv_ls(nv, name, value, flags)
-    if type(flags) == 'nil' then
-        flags = lib.NGHTTP2_NV_FLAG_NO_COPY_NAME
-    else
-        flags = flags and lib.NGHTTP2_NV_FLAG_NO_INDEX or lib.NGHTTP2_NV_FLAG_NONE
-    end
+    flags = flags and lib.NGHTTP2_NV_FLAG_NO_INDEX or lib.NGHTTP2_NV_FLAG_NONE
     nv.name = name
     nv.namelen = #name
     nv.value = value
     nv.valuelen = #value
-    nv.flags = flags
+    nv.flags = band(flags, lib.NGHTTP2_NV_FLAG_NO_COPY_NAME, lib.NGHTTP2_NV_FLAG_NO_COPY_VALUE)
 end
 
 function _M.lookup_token(name, namelen)

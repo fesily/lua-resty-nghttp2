@@ -5,144 +5,169 @@
 ---
 local semaphore = require 'ngx.semaphore'
 local ffi = require 'ffi'
-local base = require 'resty.core.base'
-local lib = require 'resty.nghttp2.libnghttp2'
-local submit = require 'resty.nghttp2.submit'
-local ctx = require 'resty.nghttp2.ctx'
-
+local session = require 'resty.nghttp2.session'
+local http_connect = require 'resty.nghttp2.http_connect'
+local logger = require 'resty.nghttp2.logger'
+local ffi_string = ffi.string
+local tab_insert = table.insert
+local tab_new = require 'table.new'
 local _M = {}
 local _mt = {
     __index = _M
 }
 
-local errlen = 1024
+local log_level = ngx.config.is_console and ngx.ERR or ngx.INFO
 
-local function get_client_error(client)
-    local buf = base.get_string_buf(errlen, false)
-    local ret = lib.nghttp2_asio_client_error(client, buf, errlen)
-    if ret == 0 then
-        return ffi.string(buf)
+---@type table<string, nghttp2.session>
+local cache_sessions = {}
+
+---@param sess nghttp2.session
+local function shutdown(sess, season)
+    cache_sessions[sess.uri] = nil
+    logger.info("shutdown nghttp2 session:", season)
+end
+
+---@class nghttp2.new_options:nghttp2.options
+---@field host string
+---@field port integer
+---@field scheme string
+---@field pool string
+---@field pool_size integer
+---@field backlog boolean
+---@field uri string
+---@field detach boolean
+---@field timeout integer
+
+function _M.connect(opt)
+    local sess, err = session.new(opt)
+    if not sess then
+        return nil, err
     end
-    if ret == 1 then
+    sess.tcpsock:settimeout(opt.timeout or 10000)
+
+    local ok, err = http_connect(sess, opt)
+    if not ok then
+        return nil, err
+    end
+
+    local th1, th2 = sess:on_connection()
+    if not opt.detach then
+        cache_sessions[sess.uri] = sess
+    end
+    return sess, nil, th1, th2
+end
+
+local function connect(p, opt, sem, result)
+    if p then
+        result[2] = "nginx exiting"
         return
     end
-    return "unknown error"
+
+    local sess, err, th1, th2 = _M.connect(opt)
+    if not sess then
+        result[2] = err
+    else
+        result[1] = sess
+    end
+    sem:post()
+    if th1 then
+        ngx.thread.wait(th1)
+        ngx.thread.wait(th2)
+    end
 end
 
----@param uri string
----@param connection_timeout? number
----@param read_timeout? number
-function _M.new(uri, connection_timeout, read_timeout)
-    local nghttp2_ctx, err = ctx.init_ctx()
-    if not nghttp2_ctx then
-        return nil, err
+---@param opt nghttp2.new_options
+---@return nghttp2.session?, string?
+function _M.new(opt)
+    assert(opt.uri, "need uri for cache keys")
+    if cache_sessions[opt.uri] then
+        return cache_sessions[opt.uri]
     end
-
-    if not uri then
-        return nil, 'uri is required'
-    end
-
-    if ctx.clients[uri] then
-        local client = ctx.clients[uri]
-        if lib.nghttp2_asio_client_is_ready(client.handler) then
-            return client
-        end
-    end
-
-    connection_timeout = connection_timeout or 10;
-    read_timeout = read_timeout or 10;
     local sem, err = semaphore.new()
     if not sem then
-        ngx.log(ngx.ERR, 'Could not create semaphore:', err)
-        return true
-    end
-
-    local handler = lib.nghttp2_asio_client_new(nghttp2_ctx, uri, read_timeout, connection_timeout, sem.sem)
-    if handler == nil then
-        return nil, ctx.get_error(nghttp2_ctx)
-    end
-
-    local ok, err = sem:wait(connection_timeout)
-    if not ok then
-        lib.nghttp2_asio_client_delete(handler)
         return nil, err
     end
-    ffi.gc(handler, lib.nghttp2_asio_client_delete)
+    opt.on_error = shutdown
+    opt.timeout = opt.timeout or 5000
 
-    if not lib.nghttp2_asio_client_is_ready(handler) then
-        return nil, get_client_error(handler)
+    local result = tab_new(2, 0)
+    local ok, err = ngx.timer.at(0, connect, opt, sem, result)
+    if not ok then
+        return nil, err
     end
+    sem:wait(30)
 
-    local client = setmetatable({
-        nghttp2_ctx,
-        handler = handler,
-        uri = uri,
-        read_timeout = read_timeout,
-        connection_timeout = connection_timeout,
-    }, _mt)
-    -- set error event
-    ctx.clients[uri] = client
-    return client
+    return result[1], result[2]
 end
 
----@param method "GET"|"POST"|"PUT"|"DELETE"
----@param uri string
----@param data? string
-function _M:new_submit(method, uri, data)
-    if not lib.nghttp2_asio_client_is_ready(self.handler) then
-        -- session is stopped,so we need create a new session
-        return nil, 'retry'
+---@param request nghttp2.request
+local function request_on_close(request, season)
+    if season then
+        logger.info("request_on_close:", season)
     end
-    local handler = lib.nghttp2_asio_submit_new(self.handler, method, uri, data, nil)
-    if handler == nil then
-        return nil, 'can\' create submit'
+    if request.sem then
+        request.sem:post()
     end
-    ffi.gc(handler, lib.nghttp2_asio_submit_delete)
-    return submit.new(handler, get_client_error, self.handler)
 end
 
-function _M:restart()
-    ctx.clients[self.uri] = nil
-    return _M.new(self.uri, self.connection_timeout, self.read_timeout)
+---@param response nghttp2.response
+local function response_data_cb(response, data, len)
+    if data then
+        response.has_body = true
+        response.body = response.body or {}
+        tab_insert(response.body, ffi_string(data, len))
+    end
 end
 
-local function retry(self, opts)
-    local client, err = self:restart()
-    if not client then return nil, err end
-    return client:request(opts)
-end
+---@class nghttp2.request_params
+---@field method ngx.http.method
+---@field uri string
+---@field headers nghttp2.headers
+---@field body string|function
+---@field scheme string
+---@field host string
+---@field timeout integer
+---@field no_read_headers boolean
 
-function _M:request(opts)
+---@param sess nghttp2.session
+---@param opts nghttp2.request_params
+function _M.request(sess, opts)
     if not opts then
         return nil, 'invalid options'
     end
-    local method = opts.method or "GET"
-    local uri = opts.uri or "/"
-    local headers = opts.headers
-    local data = opts.data
-    local read_headers = opts.read_headers or false
-    local timeout = opts.timeout or 1
-    local submit, err = _M.new_submit(self, method, uri, data)
-    if not submit then
-        if err == 'retry' then
-            return retry(self, opts)
-        end
-        return nil, err
-    end
-    if headers then
-        submit:send_headers(headers)
-    end
-    local status_code, err = submit:submit(read_headers, timeout)
-    if not status_code then
-        if err == 'retry' then
-            return retry(self, opts)
-        end
-        return nil, err
+
+    if not sess:request_allowed() then
+        cache_sessions[sess.uri] = nil
+        --please new session
+        return nil, "request not allowed"
     end
 
-    submit.status = status_code
-    submit.has_body = submit:bodys_length() > 0
-    return submit
+    local sem, err = semaphore.new()
+    if not sem then
+        return nil, err
+    end
+    local strm
+    do
+        local method = opts.method or "GET"
+        local uri = opts.uri or "/"
+        local headers = opts.headers
+        local body = opts.body
+        local scheme = opts.scheme or "http"
+        local host = opts.host or sess.host or "localhost"
+        strm, err = sess:submit(scheme, host, uri, method, headers, body)
+        if not strm then
+            return nil, err
+        end
+    end
+
+    strm.request.sem = sem
+    strm.request.on_close = request_on_close
+    strm.response.on_data = response_data_cb
+    if not opts.no_read_headers then
+        strm.response.headers = {}
+    end
+    sem:wait(opts.timeout or 1)
+    return strm.response
 end
 
 return _M

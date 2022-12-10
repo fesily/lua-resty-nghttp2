@@ -6,7 +6,7 @@ local bit = require 'bit'
 ---@field value string
 ---@field sensitive boolean
 
----@alias nghttp2.headers table<string, nghttp2.header>
+---@alias nghttp2.headers table<string, nghttp2.header|string>
 
 ---@class nghttp2.uri_ref
 ---@field scheme string
@@ -17,37 +17,36 @@ local bit = require 'bit'
 ---@field fragment string
 
 ---@class nghttp2.request
-local request = {
-    response_cb = function(response)
-    end,
-    push_request_cb = function(request)
-    end,
-    close_cb = function(error_code)
-    end,
-    generator_cb = function(buf, len, data_flags)
-    end,
-}
+---@field on_response nil|fun(request:nghttp2.request,response:nghttp2.response)
+---@field on_push_request nil|fun(request:nghttp2.request)
+---@field on_close nil|fun(request:nghttp2.request,error_code)
+---@field generator_cb nil|fun(request:nghttp2.request, buf, len, data_flags)
+local request = {}
 local request_mt = { __index = request }
 
 local function create_request(stream)
     ---@class nghttp2.request
     return setmetatable({
         ---@type nghttp2.headers
-        headers = {},
+        headers = nil,
         ---@type nghttp2.uri_ref
         uri = {
-            scheme = "",
-            host = "",
-            path = "",
-            raw_path = "",
-            raw_query = "",
-            fragment = "",
+            scheme = nil,
+            host = nil,
+            path = nil,
+            raw_path = nil,
+            raw_query = nil,
+            fragment = nil,
         },
         ---@type ngx.http.method
-        method = "",
+        method = nil,
+        body = nil,
         header_buffer_size = 0,
         ---@type nghttp2.stream
         stream = stream,
+        generator_cb = nil,
+        on_close = nil,
+        sem = nil,
     }, request_mt)
 end
 
@@ -68,20 +67,20 @@ function request:call_on_read(buf, len, data_flags)
 end
 
 function request:call_on_close(error_code)
-    if (self.close_cb) then
-        self.close_cb(error_code)
+    if (self.on_close) then
+        self:on_close(error_code)
     end
 end
 
 function request:call_on_push(request)
-    if (self.push_request_cb) then
-        self.push_request_cb(request)
+    if (self.on_push_request) then
+        self.on_push_request(request)
     end
 end
 
 function request:call_on_response(response)
-    if (self.response_cb) then
-        self.response_cb(response)
+    if (self.on_response) then
+        self:on_response(response)
     end
 end
 
@@ -90,14 +89,13 @@ function request:cancel(error_code)
 end
 
 function request:write_trailer(headers)
+    self.headers = headers
     self.stream.session:write_trailer(self.stream, headers)
 end
 
 ---@class nghttp2.response
-local response = {
-    data_cb = function(data, len)
-    end,
-}
+---@field on_data fun(response:nghttp2.response,data)
+local response = {}
 local response_mt = { __index = response }
 
 local function create_response(stream)
@@ -109,7 +107,10 @@ local function create_response(stream)
         ---@type nghttp2.stream
         stream = stream,
         ---@type nghttp2.headers
-        headers = {},
+        headers = nil,
+        on_data = nil,
+        has_body = false,
+        body = nil,
     }, response_mt)
 end
 
@@ -117,9 +118,9 @@ function response:update_header_buffer_size(len)
     self.header_buffer_size = self.header_buffer_size + len
 end
 
-function response:call_on_data(data, len)
-    if (self.data_cb) then
-        self.data_cb(data, len)
+function response:call_on_data(data)
+    if (self.on_data) then
+        self:on_data(data)
     end
 end
 

@@ -27,11 +27,10 @@
 # ################
 # 2010 - modified for cronkite to find luajit instead of lua, as it was before.
 #
-
 FIND_PATH(LUAJIT_INCLUDE_DIR lua.h
         HINTS
         $ENV{LUAJIT_DIR}
-        PATH_SUFFIXES luajit-2.0 luajit2.0 luajit luajit-2.1
+        PATH_SUFFIXES include/luajit-2.1
         PATHS
         /usr/local/openresty/luajit
         ~/Library/Frameworks
@@ -45,7 +44,7 @@ FIND_PATH(LUAJIT_INCLUDE_DIR lua.h
         )
 
 FIND_LIBRARY(LUAJIT_LIBRARY
-        NAMES libluajit-51.a libluajit-5.1.a libluajit.a libluajit-5.1.so
+        NAMES libluajit-5.1.so libluajit-5.1.dylib libluajit-5.1.a libluajit.a
         HINTS
         $ENV{LUAJIT_DIR}
         PATH_SUFFIXES lib64 lib
@@ -61,19 +60,19 @@ FIND_LIBRARY(LUAJIT_LIBRARY
         /opt
         )
 
-IF(LUAJIT_LIBRARY)
-    IF(UNIX AND NOT APPLE)
+IF (LUAJIT_LIBRARY)
+    IF (UNIX AND NOT APPLE)
         FIND_LIBRARY(LUAJIT_MATH_LIBRARY m)
         FIND_LIBRARY(LUAJIT_DL_LIBRARY dl)
-        SET( LUAJIT_LIBRARIES "${LUAJIT_LIBRARY};${LUAJIT_DL_LIBRARY};${LUAJIT_MATH_LIBRARY}" CACHE STRING "Lua Libraries")
-    ELSE(UNIX AND NOT APPLE)
-        SET( LUAJIT_LIBRARIES "${LUAJIT_LIBRARY}" CACHE STRING "Lua Libraries")
-    ENDIF(UNIX AND NOT APPLE)
-ENDIF(LUAJIT_LIBRARY)
+        SET(LUAJIT_LIBRARIES "${LUAJIT_LIBRARY};${LUAJIT_DL_LIBRARY};${LUAJIT_MATH_LIBRARY}" CACHE STRING "Lua Libraries")
+    ELSE (UNIX AND NOT APPLE)
+        SET(LUAJIT_LIBRARIES "${LUAJIT_LIBRARY}" CACHE STRING "Lua Libraries")
+    ENDIF (UNIX AND NOT APPLE)
+ENDIF (LUAJIT_LIBRARY)
 
 INCLUDE(FindPackageHandleStandardArgs)
 # handle the QUIETLY and REQUIRED arguments and set LUAJIT_FOUND to TRUE if
 # all listed variables are TRUE
-FIND_PACKAGE_HANDLE_STANDARD_ARGS(LuaJIT DEFAULT_MSG  LUAJIT_LIBRARIES LUAJIT_INCLUDE_DIR)
+FIND_PACKAGE_HANDLE_STANDARD_ARGS(LuaJIT DEFAULT_MSG LUAJIT_LIBRARIES LUAJIT_INCLUDE_DIR)
 
 MARK_AS_ADVANCED(LUAJIT_INCLUDE_DIR LUAJIT_LIBRARIES LUAJIT_LIBRARY LUAJIT_MATH_LIBRARY)

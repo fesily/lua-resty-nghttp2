@@ -20,6 +20,29 @@
 #endif
 
 namespace luajit {
+
+#ifdef NDEBUG
+    struct check_lua_stack {
+    lua_State *L;
+    int offset{};
+};
+#else
+
+    struct check_lua_stack {
+        lua_State *L;
+        int offset;
+        int top;
+
+        check_lua_stack(lua_State *L_, int offset_ = 0) noexcept: L(L_), offset(offset_), top(lua_gettop(L)) {
+
+        }
+
+        ~check_lua_stack() {
+            assert(lua_gettop(L) - offset == top);
+        }
+    };
+
+#endif
     template<typename T>
     constexpr auto is_complex_v = std::is_same_v<T, _Complex float> || std::is_same_v<T, _Complex double> ||
                                   std::is_same_v<T, _Complex long double>;
@@ -34,7 +57,6 @@ namespace luajit {
         assert(lua_islightuserdata(L, -1));
     }
 
-
     inline bool init_ffi_api(lua_State *L) {
         auto t = lua_gettop(L);
         ffi_key(L);
@@ -44,6 +66,7 @@ namespace luajit {
             assert(lua_gettop(L) == t);
             return true;
         }
+        lua_pop(L, 1);
         ffi_key(L);
         lua_getfield(L, LUA_REGISTRYINDEX, LOADED_key);
         assert(lua_istable(L, -1));
@@ -237,7 +260,12 @@ namespace luajit {
                 return (T *) *(void **) ptr;
             } else if constexpr (std::is_array_v<T>) {
                 using t = std::remove_pointer_t<std::decay_t<T>>;
-                return luajit::array<t>{(t) ptr, lua_cdata_sizeof(L, -1)/ sizeof(t)};
+                if constexpr (std::is_bounded_array_v<T>) {
+                    return (T &) *(T *) ptr;
+                } else {
+                    return luajit::array<t>{(t *) ptr, lua_cdata_sizeof(L, -1) / sizeof(t)};
+                }
+
             } else if constexpr (std::is_pointer_v<T>) {
                 return (T) *(void **) ptr;
             } else if constexpr (std::is_enum_v<T>) {
@@ -269,12 +297,12 @@ namespace luajit {
                     return (r) std::nullopt;
                 }
             } else {
-                if constexpr (std::is_array_v<T>){
+                if constexpr (std::is_array_v<T>) {
                     using t = std::remove_pointer_t<std::decay_t<T>>;
-                    if (sz / sizeof(t) == sizeof(t)){
+                    if (sz / sizeof(t) == sizeof(t)) {
                         return (r) std::nullopt;
                     }
-                }else{
+                } else {
                     if (sz != sizeof(T)) {
                         return (r) std::nullopt;
                     }

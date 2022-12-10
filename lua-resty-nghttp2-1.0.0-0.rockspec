@@ -9,7 +9,6 @@ description = {
 }
 dependencies = {
     "luajit-ffi-loader = 1.1.0-0",
-    "lua-resty-timer = 1.1.0-1",
 }
 build = {
     type = "cmake",

@@ -1,8 +1,0 @@
-it('restart', function()
-    local nghttp2 = require('resty.nghttp2')
-    local client = assert(nghttp2.new('http://127.0.0.1:18090'))
-    assert.Not.equal(client:restart(), client)
-    assert(client:request("GET", "http://127.0.0.1:18090"))
-    assert(client:request("GET", "http://127.0.0.1:18090"))
-    assert.is_true(client.invaild)
-end)
