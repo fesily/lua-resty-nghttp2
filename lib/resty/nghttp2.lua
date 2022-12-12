@@ -127,7 +127,6 @@ end
 ---@field scheme string
 ---@field host string
 ---@field timeout integer
----@field no_read_headers boolean
 
 ---@param sess nghttp2.session
 ---@param opts nghttp2.request_params
@@ -163,9 +162,6 @@ function _M.request(sess, opts)
     strm.request.sem = sem
     strm.request.on_close = request_on_close
     strm.response.on_data = response_data_cb
-    if not opts.no_read_headers then
-        strm.response.headers = {}
-    end
     sem:wait(opts.timeout or 1)
     return strm.response
 end

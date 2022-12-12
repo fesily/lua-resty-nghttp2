@@ -107,7 +107,7 @@ local function create_response(stream)
         ---@type nghttp2.stream
         stream = stream,
         ---@type nghttp2.headers
-        headers = nil,
+        headers = {},
         on_data = nil,
         has_body = false,
         body = nil,
