@@ -1,4 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
+set(CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake" ${CMAKE_MODULE_PATH})
 
 project(resty_nghttp2 VERSION 1.0.0)
 
@@ -85,6 +86,8 @@ include_directories(
 
 find_package(OpenSSL REQUIRED)
 find_package(Boost REQUIRED)
+find_package(Libnghttp2 REQUIRED)
+find_package(LuaJIT REQUIRED)
 
 set(CPM_DOWNLOAD_VERSION 0.36.0)
 set(CPM_DOWNLOAD_LOCATION "${CMAKE_BINARY_DIR}/cmake/CPM_${CPM_DOWNLOAD_VERSION}.cmake")
@@ -96,8 +99,6 @@ endif()
 
 include(${CPM_DOWNLOAD_LOCATION})
 
-CPMAddPackage(name nghttp2_asio GITHUB_REPOSITORY fesily/nghttp2-asio GIT_TAG 4c530cb36cd089e504d4bc2a71142c901aa745f8 OPTIONS "ENABLE_STATIC_LIB ON" "ENABLE_SHARED_LIB OFF")
-
 if (SANITIZE_ADDRESS)
     add_compile_options(-fsanitize=address)
     add_link_options(-fsanitize=address)
@@ -105,17 +106,15 @@ endif()
 
 set(CMAKE_VERBOSE_MAKEFILE ON)
 set(CMAKE_CXX_STANDARD 20)
-set(CMAKE_CXX_VISIBILITY_PRESET hidden)
-set(CMAKE_C_VISIBILITY_PRESET hidden)
 
 file(GLOB SOURCES
         src/*.cpp)
 
 add_library(resty_nghttp2 SHARED ${SOURCES})
 
-target_include_directories(resty_nghttp2 PRIVATE ${OpenSSL_INCLUDE_DIR} ${Boost_INCLUDE_DIR})
+target_include_directories(resty_nghttp2 PRIVATE ${OpenSSL_INCLUDE_DIR} ${Boost_INCLUDE_DIR} ${LUAJIT_INCLUDE_DIR})
 
-target_link_libraries(resty_nghttp2 PRIVATE nghttp2_asio OpenSSL::SSL OpenSSL::Crypto)
+target_link_libraries(resty_nghttp2 PRIVATE ${LIBNGHTTP2_LIBRARIES} ${LUAJIT_LIBRARY} OpenSSL::SSL OpenSSL::Crypto)
 
 if (TESTS)
     add_subdirectory(tests)

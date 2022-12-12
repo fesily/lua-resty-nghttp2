@@ -9,7 +9,7 @@ description = {
     license = "MIT"
 }
 dependencies = {
-    "luajit-ffi-loader = 1.1.0-0"
+    "luajit-ffi-loader = 1.1.0-0",
 }
 build = {
     type = "cmake",
