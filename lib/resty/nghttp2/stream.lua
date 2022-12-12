@@ -47,6 +47,7 @@ local function create_request(stream)
         generator_cb = nil,
         on_close = nil,
         sem = nil,
+        close_season = nil,
     }, request_mt)
 end
 

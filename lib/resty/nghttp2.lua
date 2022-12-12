@@ -12,11 +12,6 @@ local ffi_string = ffi.string
 local tab_insert = table.insert
 local tab_new = require 'table.new'
 local _M = {}
-local _mt = {
-    __index = _M
-}
-
-local log_level = ngx.config.is_console and ngx.ERR or ngx.INFO
 
 ---@type table<string, nghttp2.session>
 local cache_sessions = {}
@@ -104,6 +99,7 @@ end
 local function request_on_close(request, season)
     if season then
         logger.info("request_on_close:", season)
+        request.close_season = season;
     end
     if request.sem then
         request.sem:post()
@@ -145,6 +141,7 @@ function _M.request(sess, opts)
     if not sem then
         return nil, err
     end
+    ---@type nghttp2.stream
     local strm
     do
         local method = opts.method or "GET"
@@ -158,12 +155,16 @@ function _M.request(sess, opts)
             return nil, err
         end
     end
-
-    strm.request.sem = sem
-    strm.request.on_close = request_on_close
-    strm.response.on_data = response_data_cb
+    local request = strm.request
+    request.sem = sem
+    request.on_close = request_on_close
+    local response = strm.response
+    response.on_data = response_data_cb
     sem:wait(opts.timeout or 1)
-    return strm.response
+    if request.close_season then
+        return nil, request.close_season
+    end
+    return response
 end
 
 return _M
