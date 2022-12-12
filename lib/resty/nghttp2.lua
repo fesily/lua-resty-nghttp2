@@ -74,6 +74,25 @@ end
 ---@param opt nghttp2.new_options
 ---@return nghttp2.session?, string?
 function _M.new(opt)
+    assert(opt.host)
+    if not opt.uri then
+        if opt.scheme then
+            if opt.scheme == "http" then
+                opt.port = opt.port or 80
+            elseif opt.scheme == "https" then
+                opt.port = opt.port or 443
+            end
+        else
+            if opt.port == 443 then
+                opt.scheme = "https"
+            elseif opt.port == 80 then
+                opt.scheme = "http"
+            end
+        end
+        assert(opt.scheme)
+        assert(opt.port)
+        opt.uri = opt.scheme .. "://" .. opt.host .. ":" .. opt.port
+    end
     assert(opt.uri, "need uri for cache keys")
     if cache_sessions[opt.uri] then
         return cache_sessions[opt.uri]
@@ -134,7 +153,7 @@ function _M.request(sess, opts)
     if not sess:request_allowed() then
         cache_sessions[sess.uri] = nil
         --please new session
-        return nil, "request not allowed"
+        return nil, "REFUSED_STREAM"
     end
 
     local sem, err = semaphore.new()
