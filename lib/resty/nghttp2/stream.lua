@@ -102,7 +102,7 @@ local response_mt = { __index = response }
 local function create_response(stream)
     ---@class nghttp2.response
     return setmetatable({
-        status_code = 0,
+        status = 0,
         content_length = 0,
         header_buffer_size = 0,
         ---@type nghttp2.stream
@@ -111,6 +111,7 @@ local function create_response(stream)
         headers = {},
         on_data = nil,
         has_body = false,
+        ---@type string[]|nil
         body = nil,
     }, response_mt)
 end
@@ -134,7 +135,7 @@ local stream = {}
 
 ---@return boolean
 function stream:expect_final_response()
-    return self.response.status_code / 100 == 1
+    return self.response.status / 100 == 1
 end
 
 local stream_mt = { __index = stream }

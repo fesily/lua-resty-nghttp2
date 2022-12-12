@@ -27,10 +27,10 @@ local function user_data_key(user_data)
     return tonumber(ffi_cast(uint16_t, user_data))
 end
 
+local const_nghttp2_frame_ptr_t = ffi.typeof "const nghttp2_frame*"
 local void_ptr_t = ffi.typeof "void*"
 --- int on_stream_close_callback(nghttp2_session *session, int32_t stream_id, uint32_t error_code, void *user_data)
-function libresty_nghttp2.on_data_chunk_recv(session, flags, stream_id, data, user_data)
-    user_data = ffi_cast(void_ptr_t, user_data)
+local function on_data_chunk_recv(session, flags, stream_id, data, user_data)
     logger.debug("nghttp2_on_data_chunk_recv_callback")
     session = session_registry[user_data_key(user_data)]
     if not session then
@@ -39,8 +39,12 @@ function libresty_nghttp2.on_data_chunk_recv(session, flags, stream_id, data, us
     return session:on_data_chunk_recv(flags, stream_id, data)
 end
 
-function libresty_nghttp2.on_stream_close(session, stream_id, error_code, user_data)
+function libresty_nghttp2.on_data_chunk_recv(session, flags, stream_id, data, user_data)
     user_data = ffi_cast(void_ptr_t, user_data)
+    return on_data_chunk_recv(session, flags, stream_id, data, user_data)
+end
+
+local function on_stream_close(session, stream_id, error_code, user_data)
     logger.debug("nghttp2_on_stream_close_callback")
     session = session_registry[user_data_key(user_data)]
     if not session then
@@ -49,11 +53,12 @@ function libresty_nghttp2.on_stream_close(session, stream_id, error_code, user_d
     return session:on_stream_close(stream_id, error_code)
 end
 
-local const_nghttp2_frame_ptr_t = ffi.typeof "const nghttp2_frame*"
-function libresty_nghttp2.on_begin_headers(session, frame, user_data)
-    frame = ffi_cast(const_nghttp2_frame_ptr_t, frame)
+function libresty_nghttp2.on_stream_close(session, stream_id, error_code, user_data)
     user_data = ffi_cast(void_ptr_t, user_data)
+    return on_stream_close(session, stream_id, error_code, user_data)
+end
 
+local function on_begin_headers(session, frame, user_data)
     logger.debug("nghttp2_on_begin_headers_callback")
     session = session_registry[user_data_key(user_data)]
     if not session then
@@ -62,10 +67,14 @@ function libresty_nghttp2.on_begin_headers(session, frame, user_data)
     return session:on_begin_headers(frame)
 end
 
-function libresty_nghttp2.on_frame_recv(session, frame, user_data)
+function libresty_nghttp2.on_begin_headers(session, frame, user_data)
     frame = ffi_cast(const_nghttp2_frame_ptr_t, frame)
     user_data = ffi_cast(void_ptr_t, user_data)
 
+    return on_begin_headers(session, frame, user_data)
+end
+
+local function on_frame_recv(session, frame, user_data)
     logger.debug("nghttp2_on_frame_recv_callback")
     session = session_registry[user_data_key(user_data)]
     if not session then
@@ -74,16 +83,25 @@ function libresty_nghttp2.on_frame_recv(session, frame, user_data)
     return session:on_frame_recv(frame)
 end
 
-function libresty_nghttp2.on_header(session, frame, name, value, flags, user_data)
+function libresty_nghttp2.on_frame_recv(session, frame, user_data)
     frame = ffi_cast(const_nghttp2_frame_ptr_t, frame)
     user_data = ffi_cast(void_ptr_t, user_data)
+    return on_frame_recv(session, frame, user_data)
+end
 
+local function on_header(session, frame, name, value, flags, user_data)
     logger.debug("nghttp2_on_header_callback")
     session = session_registry[user_data_key(user_data)]
     if not session then
         return lib.NGHTTP2_ERR_CALLBACK_FAILURE
     end
     return session:on_header(frame, name, value, flags)
+end
+
+function libresty_nghttp2.on_header(session, frame, name, value, flags, user_data)
+    frame = ffi_cast(const_nghttp2_frame_ptr_t, frame)
+    user_data = ffi_cast(void_ptr_t, user_data)
+    return on_header(session, frame, name, value, flags, user_data)
 end
 
 -- Make a C callbacks structure using the functions in a table.
@@ -296,7 +314,7 @@ function _M:on_header(frame, name, value, flags)
 
         local res = strm.response
         if token == http2.HD__STATUS then
-            res.status_code = tonumber(value);
+            res.status = tonumber(value);
         else
             if res.header_buffer_size + namelen + valuelen > 64 * 1024 then
                 lib.nghttp2_submit_rst_stream(self.session, lib.NGHTTP2_FLAG_NONE,
@@ -532,10 +550,7 @@ local nghttp2_data_provider = ffi.new("nghttp2_data_provider")
 nghttp2_data_provider.read_callback = libresty_nghttp2.resty_nghttp2_data_provider_read_callback
 local uint32_t_ptr_t = ffi.typeof "uint32_t*"
 local size_t_ptr_t = ffi.typeof "size_t*"
-function libresty_nghttp2.data_provider_read(stream_id, buf, length, data_flags, user_data)
-    length = ffi_cast(size_t_ptr_t, length)[0]
-    data_flags = ffi_cast(uint32_t_ptr_t, data_flags)
-    user_data = ffi_cast(void_ptr_t, user_data)
+local function data_provider_read(stream_id, buf, length, data_flags, user_data)
     local session = session_registry[user_data_key(user_data)]
     if not session then
         return lib.NGHTTP2_ERR_CALLBACK_FAILURE
@@ -545,6 +560,13 @@ function libresty_nghttp2.data_provider_read(stream_id, buf, length, data_flags,
         return lib.NGHTTP2_ERR_CALLBACK_FAILURE
     end
     return strm.request:call_on_read(buf, length, data_flags)
+end
+
+function libresty_nghttp2.data_provider_read(stream_id, buf, length, data_flags, user_data)
+    length = ffi_cast(size_t_ptr_t, length)[0]
+    data_flags = ffi_cast(uint32_t_ptr_t, data_flags)
+    user_data = ffi_cast(void_ptr_t, user_data)
+    return data_provider_read(stream_id, buf, length, data_flags, user_data)
 end
 
 ffi.cdef [[
@@ -564,8 +586,10 @@ local function createa_headers_nv(nvs, i, headers)
     local i = i or 0
     for k, v in pairs(headers) do
         if type(v) == 'table' then
+            assert(type(v.value) == 'string')
             http2.make_nv_ls(nvs[i], k, v.value, v.sensitive)
         else
+            assert(type(v) == 'string')
             http2.make_nv_ls(nvs[i], k, v)
         end
         i = i + 1
@@ -574,7 +598,7 @@ local function createa_headers_nv(nvs, i, headers)
 end
 
 function _M:request_allowed()
-    return lib.nghttp2_session_check_request_allowed(self.session) ~= 0
+    return not self.stopped and lib.nghttp2_session_check_request_allowed(self.session) ~= 0
 end
 
 function _M:submit(scheme, host, path, method, headers, data_or_cb, prio)
