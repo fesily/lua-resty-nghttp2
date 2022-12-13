@@ -1,8 +1,7 @@
-package = "lua-resty-nghttp2-asio"
-version = "1.2.0-0"
+package = "lua-resty-nghttp2"
+version = "1.0.0-0"
 source = {
     url = "git+https://github.com/fesily/lua-resty-nghttp2.git",
-    branch = 'asio'
 }
 description = {
     homepage = "https://github.com/fesily/lua-resty-nghttp2",
