@@ -84,8 +84,6 @@ include_directories(
         "${CMAKE_CURRENT_BINARY_DIR}" # for config.h
 )
 
-find_package(OpenSSL REQUIRED)
-find_package(Boost REQUIRED)
 find_package(Libnghttp2 REQUIRED)
 find_package(LuaJIT REQUIRED)
 
@@ -112,9 +110,9 @@ file(GLOB SOURCES
 
 add_library(resty_nghttp2 SHARED ${SOURCES})
 
-target_include_directories(resty_nghttp2 PRIVATE ${OpenSSL_INCLUDE_DIR} ${Boost_INCLUDE_DIR} ${LUAJIT_INCLUDE_DIR})
+target_include_directories(resty_nghttp2 PRIVATE ${LUAJIT_INCLUDE_DIR} ${LIBNGHTTP2_INCLUDE_DIR})
 
-target_link_libraries(resty_nghttp2 PRIVATE ${LIBNGHTTP2_LIBRARIES} ${LUAJIT_LIBRARY} OpenSSL::SSL OpenSSL::Crypto)
+target_link_libraries(resty_nghttp2 PRIVATE ${LIBNGHTTP2_LIBRARIES} ${LUAJIT_LIBRARY})
 
 if (TESTS)
     add_subdirectory(tests)
