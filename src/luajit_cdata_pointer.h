@@ -202,7 +202,7 @@ namespace luajit {
         [[nodiscard]] constexpr bool empty() const noexcept { return Size == 0; }
 
         // element access:
-        _LIBCPP_INLINE_VISIBILITY _LIBCPP_CONSTEXPR_AFTER_CXX14
+        constexpr
         reference operator[](size_type _n) noexcept {
             assert(_n < Size);
             return _elems_[_n];
@@ -312,6 +312,7 @@ namespace luajit {
         }
         return std::make_optional(lua_get_from_cdata_unsafe<T>(L, idx));
     }
+
 
     template<typename T>
     decltype(auto) lua_get_from_cdata(lua_State *L, int idx) {
