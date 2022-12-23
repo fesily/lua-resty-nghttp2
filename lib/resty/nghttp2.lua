@@ -76,13 +76,13 @@ end
 function _M.new(opt)
     assert(opt.host)
     if not opt.uri then
-        if opt.scheme then
+        if opt.scheme and not opt.port then
             if opt.scheme == "http" then
-                opt.port = opt.port or 80
+                opt.port = 80
             elseif opt.scheme == "https" then
-                opt.port = opt.port or 443
+                opt.port = 443
             end
-        else
+        elseif opt.port and not opt.scheme then
             if opt.port == 443 then
                 opt.scheme = "https"
             elseif opt.port == 80 then
