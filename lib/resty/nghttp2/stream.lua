@@ -126,6 +126,13 @@ function response:call_on_data(data)
     end
 end
 
+function response:read_body()
+    if type(self.body) == "table" then
+        return table.concat(self.body)
+    end
+    return self.body
+end
+
 ---@class nghttp2.stream
 ---@field session nghttp2.session
 ---@field stream_id integer
