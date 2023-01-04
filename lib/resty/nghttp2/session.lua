@@ -609,6 +609,10 @@ function _M:submit(scheme, host, path, method, headers, data_or_cb, prio)
     local strm = create_stream(0, self)
     local req = strm.request
 
+    host = host or headers.Host or headers.host
+    --remove headers host
+    headers.Host = nil
+    headers.host = nil
     local nvs = nghttp2_nv_t(4 + tab_nkeys(headers))
     http2.make_nv_ls(nvs[0], ":method", method)
     http2.make_nv_ls(nvs[1], ":scheme", scheme)
