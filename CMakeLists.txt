@@ -105,6 +105,12 @@ endif()
 set(CMAKE_VERBOSE_MAKEFILE ON)
 set(CMAKE_CXX_STANDARD 20)
 
+cmake_path(GET LIBNGHTTP2_LIBRARY PARENT_PATH LIBNGHTTP2_LIBRARY_DIRS)
+cmake_path(GET LUAJIT_LIBRARY PARENT_PATH LUAJIT_LIBRARY_DIRS)
+
+set(CMAKE_INSTALL_RPATH "${LIBNGHTTP2_LIBRARY_DIRS}:${LUAJIT_LIBRARY_DIRS}")
+set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
+
 file(GLOB SOURCES
         src/*.cpp)
 
@@ -112,7 +118,8 @@ add_library(resty_nghttp2 SHARED ${SOURCES})
 
 target_include_directories(resty_nghttp2 PRIVATE ${LUAJIT_INCLUDE_DIR} ${LIBNGHTTP2_INCLUDE_DIR})
 
-target_link_libraries(resty_nghttp2 PRIVATE ${LIBNGHTTP2_LIBRARIES} ${LUAJIT_LIBRARY})
+target_link_libraries(resty_nghttp2 PRIVATE ${LIBNGHTTP2_LIBRARY} ${LUAJIT_LIBRARIES})
+
 
 if (TESTS)
     add_subdirectory(tests)
