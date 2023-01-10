@@ -586,11 +586,9 @@ local function createa_headers_nv(nvs, i, headers)
     local i = i or 0
     for k, v in pairs(headers) do
         if type(v) == 'table' then
-            assert(type(v.value) == 'string')
-            http2.make_nv_ls(nvs[i], k, v.value, v.sensitive)
+            http2.make_nv_ls(nvs[i], k, tostring(v.value), v.sensitive)
         else
-            assert(type(v) == 'string')
-            http2.make_nv_ls(nvs[i], k, v)
+            http2.make_nv_ls(nvs[i], k, tostring(v))
         end
         i = i + 1
     end
