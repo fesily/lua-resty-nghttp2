@@ -246,7 +246,8 @@ local function handle_all_ping(p)
     else
         for k, v in pairs(ping_timer_master) do
             if v then
-                ---@cast k nghttp2.session k:handle_ping()
+                ---@cast k + nghttp2.session
+                k:handle_ping()
             end
         end
     end
